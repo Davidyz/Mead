@@ -6,7 +6,7 @@
 
 use lyquid::prelude::*;
 
-use crate::types::merkle::{deserialize_hash, serialize_hash, Hash, MerkleTree};
+use crate::types::merkle::{Hash, MerkleTree, deserialize_hash, serialize_hash};
 
 /// A single matched skill with its BM25 relevance score.
 ///
@@ -19,7 +19,10 @@ use crate::types::merkle::{deserialize_hash, serialize_hash, Hash, MerkleTree};
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SkillMatch {
     /// Digest of the matched skill.
-    #[serde(serialize_with = "serialize_hash", deserialize_with = "deserialize_hash")]
+    #[serde(
+        serialize_with = "serialize_hash",
+        deserialize_with = "deserialize_hash"
+    )]
     pub skill_digest: Hash,
     /// BM25 relevance score computed with the top-k skills as the corpus.
     pub bm25_score: f64,
@@ -34,13 +37,19 @@ pub struct SkillMatch {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SignedResult {
     /// Digest of the originating query text.
-    #[serde(serialize_with = "serialize_hash", deserialize_with = "deserialize_hash")]
+    #[serde(
+        serialize_with = "serialize_hash",
+        deserialize_with = "deserialize_hash"
+    )]
     pub query_digest: Hash,
     /// List of matched skills with their BM25 scores.
     pub matches: Vec<SkillMatch>,
     /// Merkle tree root hash over the list of matches
     /// (both skill digests and BM25 scores).
-    #[serde(serialize_with = "serialize_hash", deserialize_with = "deserialize_hash")]
+    #[serde(
+        serialize_with = "serialize_hash",
+        deserialize_with = "deserialize_hash"
+    )]
     pub merkle_root: Hash,
     /// UTC timestamp of when the result was submitted.
     pub timestamp: u64,
@@ -55,7 +64,12 @@ impl SignedResult {
     ///
     /// Each leaf is `blake3(skill_digest || bm25_score_bytes)` to ensure both
     /// the skill digest and its BM25 score are committed to the tree.
-    pub fn new(query_digest: Hash, matches: Vec<SkillMatch>, sender: Address, signature: Vec<u8>) -> Self {
+    pub fn new(
+        query_digest: Hash,
+        matches: Vec<SkillMatch>,
+        sender: Address,
+        signature: Vec<u8>,
+    ) -> Self {
         let leaves: Vec<Hash> = matches
             .iter()
             .map(|m| {

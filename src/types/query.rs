@@ -26,7 +26,10 @@ pub struct QueryParams {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SignedQuery {
     /// Blake3 digest of the query text.
-    #[serde(serialize_with = "serialize_hash", deserialize_with = "deserialize_hash")]
+    #[serde(
+        serialize_with = "serialize_hash",
+        deserialize_with = "deserialize_hash"
+    )]
     pub query_digest: Hash,
     /// Search parameters (e.g., number of results per peer).
     pub params: QueryParams,

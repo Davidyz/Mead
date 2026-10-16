@@ -256,7 +256,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    #[ignore]
     fn single_leaf_tree() {
         let leaf = hash_bytes(b"leaf1");
         let tree = MerkleTree::new(vec![leaf]);
@@ -265,7 +264,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    #[ignore]
     fn two_leaf_tree() {
         let left = hash_bytes(b"leaf1");
         let right = hash_bytes(b"leaf2");
@@ -277,7 +275,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    #[ignore]
     fn four_leaf_tree() {
         let leaves: Vec<Hash> = (0..4)
             .map(|i| hash_bytes(&[i as u8]))
@@ -294,7 +291,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    #[ignore]
     fn odd_leaf_count() {
         let leaves: Vec<Hash> = (0..3)
             .map(|i| hash_bytes(&[i as u8]))
@@ -309,7 +305,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    #[ignore]
     fn invalid_proof_fails() {
         let leaves: Vec<Hash> = (0..4)
             .map(|i| hash_bytes(&[i as u8]))
@@ -326,7 +321,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    #[ignore]
     fn proof_verification_independent_of_tree() {
         let leaves: Vec<Hash> = (0..8)
             .map(|i| hash_bytes(&[i as u8]))
@@ -341,7 +335,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    #[ignore]
     fn large_tree() {
         let leaves: Vec<Hash> = (0..100)
             .map(|i| hash_bytes(&(i as u32).to_le_bytes()))

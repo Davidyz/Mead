@@ -184,10 +184,17 @@ impl MerkleTree {
     }
 
     /// Collects sibling hashes along the path from the root to the leaf at `index`.
-    fn collect_proof(node: &MerkleNode, index: usize, siblings: &mut Vec<(Hash, SiblingDirection)>) {
+    fn collect_proof(
+        node: &MerkleNode,
+        index: usize,
+        siblings: &mut Vec<(Hash, SiblingDirection)>,
+    ) {
         if let MerkleNode::Internal { left, right } = node {
             if index < left.leaf_count() {
-                siblings.push((Hash::from_bytes(right.hash_bytes()), SiblingDirection::Right));
+                siblings.push((
+                    Hash::from_bytes(right.hash_bytes()),
+                    SiblingDirection::Right,
+                ));
                 Self::collect_proof(left, index, siblings);
             } else {
                 siblings.push((Hash::from_bytes(left.hash_bytes()), SiblingDirection::Left));
@@ -276,9 +283,7 @@ mod tests {
 
     #[lyquid_test::test]
     fn four_leaf_tree() {
-        let leaves: Vec<Hash> = (0..4)
-            .map(|i| hash_bytes(&[i as u8]))
-            .collect();
+        let leaves: Vec<Hash> = (0..4).map(|i| hash_bytes(&[i as u8])).collect();
         let tree = MerkleTree::new(leaves.clone());
 
         // Verify each leaf's proof
@@ -292,9 +297,7 @@ mod tests {
 
     #[lyquid_test::test]
     fn odd_leaf_count() {
-        let leaves: Vec<Hash> = (0..3)
-            .map(|i| hash_bytes(&[i as u8]))
-            .collect();
+        let leaves: Vec<Hash> = (0..3).map(|i| hash_bytes(&[i as u8])).collect();
         let tree = MerkleTree::new(leaves.clone());
 
         // Should not panic with 3 leaves
@@ -306,9 +309,7 @@ mod tests {
 
     #[lyquid_test::test]
     fn invalid_proof_fails() {
-        let leaves: Vec<Hash> = (0..4)
-            .map(|i| hash_bytes(&[i as u8]))
-            .collect();
+        let leaves: Vec<Hash> = (0..4).map(|i| hash_bytes(&[i as u8])).collect();
         let tree = MerkleTree::new(leaves);
 
         let mut proof = tree.prove(0);
@@ -322,9 +323,7 @@ mod tests {
 
     #[lyquid_test::test]
     fn proof_verification_independent_of_tree() {
-        let leaves: Vec<Hash> = (0..8)
-            .map(|i| hash_bytes(&[i as u8]))
-            .collect();
+        let leaves: Vec<Hash> = (0..8).map(|i| hash_bytes(&[i as u8])).collect();
         let tree = MerkleTree::new(leaves.clone());
 
         for i in 0..8 {

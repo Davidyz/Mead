@@ -4,4 +4,4 @@ pub mod results;
 
 pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection};
 pub use query::{QueryParams, ResultsPerPeer, SignedQuery};
-pub use results::{SkillMatch, SignedResult};
+pub use results::{SignedResult, SkillMatch};

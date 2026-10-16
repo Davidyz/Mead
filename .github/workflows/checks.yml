@@ -1,0 +1,26 @@
+name: "Formatting and Linting"
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Ensure rustfmt is installed and setup problem matcher
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+      - name: Rustfmt Check
+        uses: actions-rust-lang/rustfmt@v1
+
+      - name: Install LDK
+        run: curl ldk.lyquor.dev -L | bash
+
+      - name: Start lyquor network
+        run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
+
+      - name: Run shaker tests
+        run: shaker test Cargo.toml

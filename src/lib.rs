@@ -6,6 +6,7 @@
 //! methods while preserving the exported method layout.
 
 use lyquid::prelude::*;
+pub mod types;
 
 state! {
     network greeting: String = String::new();

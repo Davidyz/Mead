@@ -59,6 +59,25 @@ pub struct SignedResult {
     pub signature: Vec<u8>,
 }
 
+impl MerkleTree {
+    /// Creates a new Merkle tree from a list of skill matches.
+    ///
+    /// Each leaf is `blake3(skill_digest || bm25_score_bytes)` to ensure both
+    /// the skill digest and its BM25 score are committed to the tree.
+    pub fn from_matches(matches: Vec<SkillMatch>) -> Self {
+        let leaves: Vec<Hash> = matches
+            .iter()
+            .map(|m| {
+                let mut data = [0u8; 40]; // 32 bytes digest + 8 bytes f64
+                data[..32].copy_from_slice(m.skill_digest.as_bytes());
+                data[32..].copy_from_slice(&m.bm25_score.to_le_bytes());
+                lyquid::prelude::blake3::hash(&data)
+            })
+            .collect();
+        Self::new(leaves)
+    }
+}
+
 impl SignedResult {
     /// Creates a new `SignedResult` with a Merkle tree committed to all matches.
     ///
@@ -70,16 +89,7 @@ impl SignedResult {
         sender: Address,
         signature: Vec<u8>,
     ) -> Self {
-        let leaves: Vec<Hash> = matches
-            .iter()
-            .map(|m| {
-                let mut data = [0u8; 40]; // 32 bytes digest + 8 bytes f64
-                data[..32].copy_from_slice(m.skill_digest.as_bytes());
-                data[32..].copy_from_slice(&m.bm25_score.to_le_bytes());
-                lyquid::prelude::blake3::hash(&data)
-            })
-            .collect();
-        let tree = MerkleTree::new(leaves);
+        let tree = MerkleTree::from_matches(matches.clone());
 
         Self {
             query_digest,

@@ -23,4 +23,4 @@ jobs:
         run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
 
       - name: Run shaker tests
-        run: shaker test Cargo.toml
+        run: ~/.shakenup/bin/shaker test Cargo.toml

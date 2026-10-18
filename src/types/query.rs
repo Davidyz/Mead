@@ -8,6 +8,27 @@ use lyquid::prelude::*;
 
 use crate::types::merkle::{deserialize_hash, serialize_hash};
 
+/// Registry that tracks all submitted queries and their responders.
+///
+/// - `queries`: maps query digest to the full SignedQuery
+/// - `responder_index`: maps query digest to the set of addresses that submitted results
+#[derive(Debug, Clone)]
+pub struct QueryRegistry {
+    /// Query digest -> SignedQuery.
+    pub queries: HashMap<Hash, SignedQuery>,
+    /// Query digest -> set of responder addresses.
+    pub responder_index: HashMap<Hash, HashSet<Address>>,
+}
+
+impl Default for QueryRegistry {
+    fn default() -> Self {
+        Self {
+            queries: new_hashmap(),
+            responder_index: new_hashmap(),
+        }
+    }
+}
+
 /// The number of results each peer should return for a search query.
 pub type ResultsPerPeer = u64;
 

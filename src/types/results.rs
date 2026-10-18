@@ -8,6 +8,24 @@ use lyquid::prelude::*;
 
 use crate::types::merkle::{Hash, MerkleTree, deserialize_hash, serialize_hash};
 
+/// Registry that stores all submitted search results.
+///
+/// Maps (query_digest, submitter_address) to the full SignedResult,
+/// ensuring each peer can only submit one result per query.
+#[derive(Debug, Clone)]
+pub struct ResultRegistry {
+    /// (query_digest, submitter_address) -> SignedResult.
+    pub results: HashMap<(Hash, Address), SignedResult>,
+}
+
+impl Default for ResultRegistry {
+    fn default() -> Self {
+        Self {
+            results: new_hashmap(),
+        }
+    }
+}
+
 /// A single matched skill with its BM25 relevance score.
 ///
 /// The BM25 score is computed using the top-k skills as the entire corpus,

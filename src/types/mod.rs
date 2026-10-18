@@ -3,5 +3,5 @@ pub mod query;
 pub mod results;
 
 pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection};
-pub use query::{QueryParams, ResultsPerPeer, SignedQuery};
-pub use results::{SignedResult, SkillMatch};
+pub use query::{QueryParams, QueryRegistry, ResultsPerPeer, SignedQuery};
+pub use results::{ResultRegistry, SignedResult, SkillMatch};

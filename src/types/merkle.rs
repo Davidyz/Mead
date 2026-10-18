@@ -1,8 +1,13 @@
 //! A Merkle tree implementation using Blake3 hashing.
 //!
 //! Used to commit to a list of `(skill_digest, bm25_score)` tuples in search results.
-//! The tree is built bottom-up from leaf hashes, with odd-length lists handled by
+//! The tree is built bottom-up from leaf hashes. Odd-sized levels are split at
+//! `floor(len / 2)`, so the tree shape is deterministic and unbalanced rather than
 //! duplicating the last element.
+//!
+//! Leaves and internal nodes use distinct domain separators, and empty trees have
+//! a fixed domain-separated root. This prevents a leaf hash from being interpreted
+//! as an internal-node hash and gives zero-result peers a canonical commitment.
 //!
 //! Uses the re-exported `blake3` from `lyquid::prelude` to ensure type compatibility
 //! with on-chain digest types.
@@ -10,6 +15,10 @@
 use lyquid::prelude::blake3;
 
 pub use lyquid::prelude::Hash;
+
+const LEAF_DOMAIN: &[u8] = b"mead/merkle/leaf/v1";
+const INTERNAL_DOMAIN: &[u8] = b"mead/merkle/internal/v1";
+const EMPTY_DOMAIN: &[u8] = b"mead/merkle/empty/v1";
 
 /// Serialize a `Hash` as a hex string with "0x" prefix.
 pub fn serialize_hash<S>(hash: &Hash, serializer: S) -> Result<S::Ok, S::Error>
@@ -41,11 +50,23 @@ mod hex {
         bytes.iter().map(|b| format!("{:02x}", b)).collect()
     }
 
-    /// Decode a lowercase hex string to bytes.
+    /// Decode a hex string to bytes.
+    ///
+    /// Returns an error instead of panicking on odd-length or non-ASCII input.
     pub fn decode(hex: &str) -> Result<Vec<u8>, String> {
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| e.to_string()))
+        if !hex.is_ascii() {
+            return Err("hex string must contain only ASCII characters".into());
+        }
+        if hex.len() % 2 != 0 {
+            return Err("hex string must have an even number of characters".into());
+        }
+
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let pair = core::str::from_utf8(pair).map_err(|e| e.to_string())?;
+                u8::from_str_radix(pair, 16).map_err(|e| e.to_string())
+            })
             .collect()
     }
 }
@@ -53,6 +74,7 @@ mod hex {
 /// A node in the Merkle tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MerkleNode {
+    Empty,
     Leaf(Hash),
     Internal {
         left: Box<MerkleNode>,
@@ -62,11 +84,14 @@ enum MerkleNode {
 
 /// A Merkle tree built from a list of 32-byte hash digests.
 ///
+/// The input values are treated as leaf payload hashes. The tree applies a leaf
+/// domain separator before building internal nodes.
+///
 /// Supports building the tree, generating inclusion proofs, and verifying them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MerkleTree {
     root: Hash,
-    /// The leaf hashes in left-to-right order.
+    /// The domain-separated leaf hashes in left-to-right order.
     leaves: Vec<Hash>,
     /// The tree structure for proof generation.
     tree: MerkleNode,
@@ -83,27 +108,41 @@ pub enum SiblingDirection {
 
 /// An inclusion proof for a single leaf in the Merkle tree.
 ///
-/// Contains the leaf hash, its index, and the sequence of sibling hashes
-/// needed to recompute the root.
+/// Contains the leaf hash and the sequence of sibling hashes needed to recompute
+/// the root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MerkleProof {
-    /// The hash of the leaf being proven.
+    /// The domain-separated hash of the leaf being proven.
     pub leaf_hash: Hash,
-    /// The 0-based index of the leaf in the leaves list.
-    pub leaf_index: usize,
     /// The sibling hashes and their directions, from leaf level up to the root.
     pub siblings: Vec<(Hash, SiblingDirection)>,
 }
 
-impl MerkleTree {
-    /// Creates a new Merkle tree from a list of leaf hashes.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `leaves` is empty.
-    pub fn new(leaves: Vec<Hash>) -> Self {
-        assert!(!leaves.is_empty(), "Merkle tree requires at least one leaf");
+fn hash_leaf(leaf: Hash) -> Hash {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(LEAF_DOMAIN);
+    hasher.update(leaf.as_bytes());
+    hasher.finalize()
+}
 
+fn hash_internal(left: Hash, right: Hash) -> Hash {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(INTERNAL_DOMAIN);
+    hasher.update(left.as_bytes());
+    hasher.update(right.as_bytes());
+    hasher.finalize()
+}
+
+fn empty_root() -> Hash {
+    blake3::hash(EMPTY_DOMAIN)
+}
+
+impl MerkleTree {
+    /// Creates a new Merkle tree from a list of leaf payload hashes.
+    ///
+    /// An empty list is valid and produces a fixed domain-separated empty root.
+    pub fn new(leaves: Vec<Hash>) -> Self {
+        let leaves: Vec<Hash> = leaves.into_iter().map(hash_leaf).collect();
         let tree = Self::build_tree(&leaves);
         let root = Self::hash_node(&tree);
 
@@ -120,7 +159,7 @@ impl MerkleTree {
         self.leaves.len()
     }
 
-    /// Returns a copy of all leaf hashes.
+    /// Returns a copy of all domain-separated leaf hashes.
     pub fn leaves(&self) -> Vec<Hash> {
         self.leaves.clone()
     }
@@ -129,7 +168,7 @@ impl MerkleTree {
     ///
     /// # Panics
     ///
-    /// Panics if `index` is out of bounds.
+    /// Panics if `index` is out of bounds, including for an empty tree.
     pub fn prove(&self, index: usize) -> MerkleProof {
         assert!(
             index < self.leaves.len(),
@@ -143,43 +182,42 @@ impl MerkleTree {
 
         MerkleProof {
             leaf_hash: self.leaves[index],
-            leaf_index: index,
             siblings,
         }
     }
 
     /// Verifies a Merkle proof against this tree's root.
     pub fn verify(&self, proof: &MerkleProof) -> bool {
-        let computed_root = proof.compute_root();
-        computed_root == self.root
+        proof.compute_root() == self.root
     }
 
     /// Builds the Merkle tree structure from a list of leaf hashes.
     fn build_tree(leaves: &[Hash]) -> MerkleNode {
-        if leaves.len() == 1 {
-            return MerkleNode::Leaf(leaves[0]);
-        }
+        match leaves.len() {
+            0 => MerkleNode::Empty,
+            1 => MerkleNode::Leaf(leaves[0]),
+            len => {
+                let mid = len / 2;
+                let left = Self::build_tree(&leaves[..mid]);
+                let right = Self::build_tree(&leaves[mid..]);
 
-        let mid = leaves.len() / 2;
-        let left = Self::build_tree(&leaves[..mid]);
-        let right = Self::build_tree(&leaves[mid..]);
-
-        MerkleNode::Internal {
-            left: Box::new(left),
-            right: Box::new(right),
+                MerkleNode::Internal {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }
+            }
         }
     }
 
     /// Computes the Blake3 hash of a MerkleNode.
     fn hash_node(node: &MerkleNode) -> Hash {
         match node {
+            MerkleNode::Empty => empty_root(),
             MerkleNode::Leaf(h) => *h,
-            MerkleNode::Internal { left, right } => {
-                let mut data = [0u8; 64];
-                data[..32].copy_from_slice(&left.hash_bytes());
-                data[32..].copy_from_slice(&right.hash_bytes());
-                blake3::hash(&data)
-            }
+            MerkleNode::Internal { left, right } => hash_internal(
+                Hash::from_bytes(left.hash_bytes()),
+                Hash::from_bytes(right.hash_bytes()),
+            ),
         }
     }
 
@@ -208,6 +246,7 @@ impl MerkleNode {
     /// Returns the hash bytes of this node.
     fn hash_bytes(&self) -> [u8; 32] {
         match self {
+            MerkleNode::Empty => *empty_root().as_bytes(),
             MerkleNode::Leaf(h) => *h.as_bytes(),
             MerkleNode::Internal { .. } => *MerkleTree::hash_node(self).as_bytes(),
         }
@@ -216,6 +255,7 @@ impl MerkleNode {
     /// Returns the number of leaves under this node.
     fn leaf_count(&self) -> usize {
         match self {
+            MerkleNode::Empty => 0,
             MerkleNode::Leaf(_) => 1,
             MerkleNode::Internal { left, right } => left.leaf_count() + right.leaf_count(),
         }
@@ -231,18 +271,10 @@ impl MerkleProof {
         let mut current = self.leaf_hash;
 
         for (sibling_hash, direction) in self.siblings.iter().rev() {
-            let mut data = [0u8; 64];
-            match direction {
-                SiblingDirection::Left => {
-                    data[..32].copy_from_slice(sibling_hash.as_bytes());
-                    data[32..].copy_from_slice(current.as_bytes());
-                }
-                SiblingDirection::Right => {
-                    data[..32].copy_from_slice(current.as_bytes());
-                    data[32..].copy_from_slice(sibling_hash.as_bytes());
-                }
-            }
-            current = blake3::hash(&data);
+            current = match direction {
+                SiblingDirection::Left => hash_internal(*sibling_hash, current),
+                SiblingDirection::Right => hash_internal(current, *sibling_hash),
+            };
         }
 
         current
@@ -266,7 +298,7 @@ mod tests {
     fn single_leaf_tree() {
         let leaf = hash_bytes(b"leaf1");
         let tree = MerkleTree::new(vec![leaf]);
-        assert_eq!(tree.root(), leaf);
+        assert_eq!(tree.root(), hash_leaf(leaf));
         assert_eq!(tree.leaf_count(), 1);
     }
 
@@ -276,8 +308,7 @@ mod tests {
         let right = hash_bytes(b"leaf2");
         let tree = MerkleTree::new(vec![left, right]);
 
-        // Root should be blake3(left || right)
-        let expected = hash_bytes(&[&left.as_bytes()[..], &right.as_bytes()[..]].concat());
+        let expected = hash_internal(hash_leaf(left), hash_leaf(right));
         assert_eq!(tree.root(), expected);
     }
 
@@ -290,8 +321,7 @@ mod tests {
         for i in 0..4 {
             let proof = tree.prove(i);
             assert!(tree.verify(&proof));
-            assert_eq!(proof.leaf_hash, leaves[i]);
-            assert_eq!(proof.leaf_index, i);
+            assert_eq!(proof.leaf_hash, hash_leaf(leaves[i]));
         }
     }
 
@@ -345,5 +375,23 @@ mod tests {
             let proof = tree.prove(i);
             assert!(tree.verify(&proof));
         }
+    }
+
+    #[lyquid_test::test]
+    fn empty_tree_has_canonical_root() {
+        let tree = MerkleTree::new(Vec::new());
+        assert_eq!(tree.leaf_count(), 0);
+        assert_eq!(tree.root(), empty_root());
+        assert_eq!(tree.root(), MerkleTree::new(Vec::new()).root());
+    }
+
+    #[lyquid_test::test]
+    fn hex_decode_rejects_odd_length() {
+        assert!(hex::decode("abc").is_err());
+    }
+
+    #[lyquid_test::test]
+    fn hex_decode_rejects_non_ascii() {
+        assert!(hex::decode("é0").is_err());
     }
 }

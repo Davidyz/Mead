@@ -6,7 +6,9 @@
 use lyquid::prelude::lyquor_primitives::HashBytes;
 use lyquid::prelude::*;
 pub mod types;
+pub mod verify;
 
+use types::invalid_input;
 use types::{QueryRegistry, ResultRegistry, SignedQuery, SignedResult};
 
 state! {
@@ -16,8 +18,16 @@ state! {
     network result_registry: ResultRegistry = ResultRegistry::default();
 }
 
+/// Sets this node's local skill directory.
+///
+/// Previously named `constructor`, but `constructor` must be a network function
+/// per the LDK rules, while `skill_dir` is instance state. The old name collided
+/// with Solidity's reserved `constructor` keyword in the generated stub and
+/// blocked `shaker deploy` (solc ParserError 3323). Renamed to an instance setter
+/// so it no longer collides; the value must now be passed by an explicit call
+/// after deployment.
 #[method::instance(export = eth)]
-fn constructor(ctx: &mut _, skill_dir: String) -> LyquidResult<()> {
+fn set_skill_dir(ctx: &mut _, skill_dir: String) -> LyquidResult<()> {
     {
         let mut dir = ctx.instance.skill_dir.write();
         *dir = Some(skill_dir);
@@ -26,14 +36,30 @@ fn constructor(ctx: &mut _, skill_dir: String) -> LyquidResult<()> {
 }
 
 // Registers a query and creates its responder set.
+//
+// The signature must be valid and the caller must be authorized to submit on
+// behalf of the declared sender, otherwise any node could post a query under a
+// forged address and have it accepted.
 #[method::network]
 fn register_query(ctx: &mut _, query: SignedQuery) -> LyquidResult<()> {
+    verify::ensure_authorized(ctx.caller, query.sender)?;
+
+    if !verify::verify_query(&query) {
+        return Err(invalid_input("query signature is invalid"));
+    }
+
     ctx.network.query_registry.insert(query)
 }
 
 // Validates and stores a peer result, then records the peer as a responder.
 #[method::network]
 fn submit_result(ctx: &mut _, result: SignedResult) -> LyquidResult<()> {
+    verify::ensure_authorized(ctx.caller, result.sender)?;
+
+    if !verify::verify_result(&result) {
+        return Err(invalid_input("result signature is invalid"));
+    }
+
     let query = ctx
         .network
         .query_registry

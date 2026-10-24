@@ -7,6 +7,8 @@
 
 use lyquid::prelude::*;
 
+pub mod skill;
+
 state! {
     network greeting: String = String::new();
     network greet_count: u64 = 0;
@@ -56,8 +58,6 @@ fn greet_me(ctx: &mut _) -> LyquidResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[lyquid_test::test]
     fn allocates_a_guest_string() {
         let greeting = String::from("hello");

@@ -1,5 +1,6 @@
 //! A complete skill and its canonical representation.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use lyquid::prelude::Hash;
@@ -14,6 +15,7 @@ const CANONICAL_VERSION: u8 = 1;
 const DIGEST_DOMAIN: &[u8] = b"mead/skill/v1";
 
 /// Canonical integer representation of a BM25 score.
+// TODO: unify this alias with the on-chain `SkillMatch::bm25_score` type when the scoring PR lands.
 pub type Bm25Score = i64;
 
 /// A skill together with its searchable metadata and resource files.
@@ -34,6 +36,10 @@ pub struct Skill {
     pub instructions: String,
     /// Capabilities provided by the skill.
     pub capabilities: Vec<String>,
+    /// Arbitrary string metadata from the manifest frontmatter.
+    pub metadata: BTreeMap<String, String>,
+    /// Additional frontmatter fields preserved for forward compatibility.
+    pub extra: BTreeMap<String, serde_json::Value>,
     /// Resource files shipped with the skill.
     pub resources: Vec<SkillResource>,
 }
@@ -54,6 +60,8 @@ impl Skill {
             triggers: Vec::new(),
             instructions: instructions.into(),
             capabilities: Vec::new(),
+            metadata: BTreeMap::new(),
+            extra: BTreeMap::new(),
             resources,
         }
     }
@@ -86,8 +94,22 @@ impl Skill {
             triggers: frontmatter.triggers.clone(),
             instructions: manifest.body().to_owned(),
             capabilities: frontmatter.capabilities.clone(),
+            metadata: frontmatter.metadata.clone(),
+            extra: frontmatter.extra.clone(),
             resources,
         }
+    }
+
+    /// Sets the skill metadata.
+    pub fn with_metadata(mut self, metadata: BTreeMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Sets additional preserved frontmatter fields.
+    pub fn with_extra(mut self, extra: BTreeMap<String, serde_json::Value>) -> Self {
+        self.extra = extra;
+        self
     }
 
     /// Sets the skill triggers.
@@ -139,8 +161,13 @@ impl Skill {
             )));
         }
 
-        let skill: Self = postcard::from_bytes(encoded)
+        let (skill, remaining) = postcard::take_from_bytes::<Self>(encoded)
             .map_err(|error| SkillError::InvalidSkill(error.to_string()))?;
+        if !remaining.is_empty() {
+            return Err(SkillError::InvalidSkill(
+                "trailing bytes after canonical skill encoding".into(),
+            ));
+        }
         skill.validate_canonical()?;
         Ok(skill)
     }
@@ -184,6 +211,7 @@ fn find_skill_md(dir: &Path) -> SkillResult<PathBuf> {
         return Ok(exact);
     }
 
+    let mut candidates = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
@@ -195,14 +223,21 @@ fn find_skill_md(dir: &Path) -> SkillResult<PathBuf> {
             .to_str()
             .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
         {
-            return Ok(entry.path());
+            candidates.push(entry.path());
         }
     }
 
-    Err(SkillError::InvalidSkill(format!(
-        "no SKILL.md found in {}",
-        dir.display()
-    )))
+    match candidates.len() {
+        0 => Err(SkillError::InvalidSkill(format!(
+            "no SKILL.md found in {}",
+            dir.display()
+        ))),
+        1 => Ok(candidates.remove(0)),
+        _ => Err(SkillError::InvalidSkill(format!(
+            "multiple case-insensitive SKILL.md candidates in {}",
+            dir.display()
+        ))),
+    }
 }
 
 fn load_resources(root: &Path) -> SkillResult<Vec<SkillResource>> {
@@ -310,5 +345,42 @@ mod tests {
         ]);
 
         assert!(duplicate.canonical_bytes().is_err());
+    }
+
+    #[lyquid_test::test]
+    fn rejects_trailing_canonical_bytes() {
+        let mut bytes = skill(Vec::new()).canonical_bytes().unwrap();
+        bytes.push(0);
+
+        assert!(Skill::from_canonical_bytes(&bytes).is_err());
+    }
+
+    #[lyquid_test::test]
+    fn metadata_and_extra_affect_skill_digest() {
+        let plain = skill(Vec::new());
+
+        let mut with_metadata = plain.clone();
+        with_metadata.metadata.insert("author".into(), "me".into());
+
+        let mut with_extra = plain.clone();
+        with_extra
+            .extra
+            .insert("custom".into(), serde_json::Value::String("value".into()));
+
+        assert_ne!(plain.digest().unwrap(), with_metadata.digest().unwrap());
+        assert_ne!(plain.digest().unwrap(), with_extra.digest().unwrap());
+    }
+
+    #[lyquid_test::test]
+    fn from_manifest_preserves_metadata_and_extra() {
+        let source = "---\nname: demo\ndescription: A demo\nmetadata:\n  author: me\ncustom: value\n---\nBody";
+        let manifest = MarkdownFile::parse(crate::skill::TextFile::new(source).unwrap()).unwrap();
+        let skill = Skill::from_manifest(manifest, Vec::new());
+
+        assert_eq!(skill.metadata.get("author").map(String::as_str), Some("me"));
+        assert_eq!(
+            skill.extra.get("custom").and_then(|value| value.as_str()),
+            Some("value")
+        );
     }
 }

@@ -67,6 +67,7 @@ impl SkillManager {
     }
 
     /// Returns a skill by digest.
+    // TODO: expose an iterator/digest listing for user-facing skill enumeration.
     pub fn get(&self, digest: &Hash) -> Option<Arc<Skill>> {
         self.read_skills().get(digest).cloned()
     }
@@ -106,6 +107,7 @@ impl SkillManager {
 }
 
 fn load_catalog(root: &Path) -> SkillResult<HashMap<Hash, Arc<Skill>>> {
+    // TODO: skip/report malformed or hidden child directories instead of failing the whole catalog.
     let mut directories = Vec::new();
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
@@ -119,7 +121,10 @@ fn load_catalog(root: &Path) -> SkillResult<HashMap<Hash, Arc<Skill>>> {
     for directory in directories {
         let skill = Skill::from_dir(&directory)?;
         let digest = skill.digest()?;
+        // TODO: document/verify duplicate skill digests from different directories.
         skills.entry(digest).or_insert_with(|| Arc::new(skill));
     }
     Ok(skills)
 }
+
+// TODO: add fixture-based tests for load/refresh/bundle, duplicate digests, and singleton behavior.

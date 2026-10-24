@@ -9,6 +9,91 @@ use serde::{Deserialize, Serialize};
 
 use super::{MarkdownFile, SkillError, SkillResource, SkillResult};
 
+/// Canonical, postcard-compatible serialization for arbitrary frontmatter values.
+///
+/// `serde_json::Value` cannot be deserialized by postcard because it uses
+/// `deserialize_any`, so each value is stored as its canonical JSON text.
+mod extra_serde {
+    use std::collections::BTreeMap;
+
+    use serde::de::Error as DeError;
+    use serde::ser::Error as SerError;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(
+        extra: &BTreeMap<String, serde_json::Value>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut encoded = BTreeMap::new();
+        for (key, value) in extra {
+            encoded.insert(key, canonical_json(value).map_err(SerError::custom)?);
+        }
+        encoded.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, serde_json::Value>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = BTreeMap::<String, String>::deserialize(deserializer)?;
+        let mut extra = BTreeMap::new();
+        for (key, encoded_value) in encoded {
+            let value: serde_json::Value =
+                serde_json::from_str(&encoded_value).map_err(DeError::custom)?;
+            if canonical_json(&value).map_err(DeError::custom)? != encoded_value {
+                return Err(DeError::custom("non-canonical extra JSON value"));
+            }
+            extra.insert(key, value);
+        }
+        Ok(extra)
+    }
+
+    fn canonical_json(value: &serde_json::Value) -> serde_json::Result<String> {
+        use serde_json::Value;
+
+        match value {
+            Value::Null => Ok("null".to_owned()),
+            Value::Bool(value) => Ok(value.to_string()),
+            Value::Number(value) => Ok(value.to_string()),
+            Value::String(value) => serde_json::to_string(value),
+            Value::Array(values) => {
+                let mut encoded = String::from("[");
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        encoded.push(',');
+                    }
+                    encoded.push_str(&canonical_json(value)?);
+                }
+                encoded.push(']');
+                Ok(encoded)
+            }
+            Value::Object(values) => {
+                let mut keys: Vec<_> = values.keys().collect();
+                keys.sort();
+                let mut encoded = String::from("{");
+                for (index, key) in keys.into_iter().enumerate() {
+                    if index > 0 {
+                        encoded.push(',');
+                    }
+                    encoded.push_str(&serde_json::to_string(key)?);
+                    encoded.push(':');
+                    let value = values
+                        .get(key.as_str())
+                        .expect("object key must exist in its own map");
+                    encoded.push_str(&canonical_json(value)?);
+                }
+                encoded.push('}');
+                Ok(encoded)
+            }
+        }
+    }
+}
+
 /// Version of the canonical skill encoding.
 const CANONICAL_VERSION: u8 = 1;
 /// Domain separation for skill digests.
@@ -39,6 +124,7 @@ pub struct Skill {
     /// Arbitrary string metadata from the manifest frontmatter.
     pub metadata: BTreeMap<String, String>,
     /// Additional frontmatter fields preserved for forward compatibility.
+    #[serde(with = "extra_serde")]
     pub extra: BTreeMap<String, serde_json::Value>,
     /// Resource files shipped with the skill.
     pub resources: Vec<SkillResource>,
@@ -369,6 +455,25 @@ mod tests {
 
         assert_ne!(plain.digest().unwrap(), with_metadata.digest().unwrap());
         assert_ne!(plain.digest().unwrap(), with_extra.digest().unwrap());
+    }
+
+    #[lyquid_test::test]
+    fn canonical_bytes_round_trip_preserves_metadata_and_extra() {
+        let mut original = skill(Vec::new());
+        original.metadata.insert("author".into(), "me".into());
+        original.extra.insert(
+            "custom".into(),
+            serde_json::json!({
+                "enabled": true,
+                "nested": [1, "two", null],
+                "options": {"z": 2, "a": 1}
+            }),
+        );
+
+        let bytes = original.canonical_bytes().unwrap();
+        let decoded = Skill::from_canonical_bytes(&bytes).unwrap();
+
+        assert_eq!(decoded, original);
     }
 
     #[lyquid_test::test]

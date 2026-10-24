@@ -3,9 +3,15 @@
 use std::path::{Path, PathBuf};
 
 use lyquid::prelude::Hash;
+use lyquid::prelude::blake3;
 use serde::{Deserialize, Serialize};
 
 use super::{MarkdownFile, SkillError, SkillResource, SkillResult};
+
+/// Version of the canonical skill encoding.
+const CANONICAL_VERSION: u8 = 1;
+/// Domain separation for skill digests.
+const DIGEST_DOMAIN: &[u8] = b"mead/skill/v1";
 
 /// Canonical integer representation of a BM25 score.
 pub type Bm25Score = i64;
@@ -112,18 +118,63 @@ impl Skill {
 
     /// Encodes the skill into its canonical byte representation.
     pub fn canonical_bytes(&self) -> SkillResult<Vec<u8>> {
-        unimplemented!("Skill::canonical_bytes")
+        let canonical = self.canonicalized()?;
+        let encoded = postcard::to_allocvec(&canonical)
+            .map_err(|error| SkillError::InvalidSkill(error.to_string()))?;
+
+        let mut bytes = Vec::with_capacity(1 + encoded.len());
+        bytes.push(CANONICAL_VERSION);
+        bytes.extend_from_slice(&encoded);
+        Ok(bytes)
     }
 
     /// Decodes a skill from its canonical byte representation.
     pub fn from_canonical_bytes(bytes: &[u8]) -> SkillResult<Self> {
-        let _ = bytes;
-        unimplemented!("Skill::from_canonical_bytes")
+        let (&version, encoded) = bytes
+            .split_first()
+            .ok_or_else(|| SkillError::InvalidSkill("empty canonical skill encoding".into()))?;
+        if version != CANONICAL_VERSION {
+            return Err(SkillError::InvalidSkill(format!(
+                "unsupported canonical skill version: {version}"
+            )));
+        }
+
+        let skill: Self = postcard::from_bytes(encoded)
+            .map_err(|error| SkillError::InvalidSkill(error.to_string()))?;
+        skill.validate_canonical()?;
+        Ok(skill)
     }
 
     /// Computes the canonical digest of the skill.
     pub fn digest(&self) -> SkillResult<Hash> {
-        unimplemented!("Skill::digest")
+        let bytes = self.canonical_bytes()?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(DIGEST_DOMAIN);
+        hasher.update(&bytes);
+        Ok(hasher.finalize())
+    }
+
+    fn canonicalized(&self) -> SkillResult<Self> {
+        let mut canonical = self.clone();
+        canonical
+            .resources
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        canonical.validate_canonical()?;
+        Ok(canonical)
+    }
+
+    fn validate_canonical(&self) -> SkillResult<()> {
+        for resource in &self.resources {
+            resource.validate()?;
+        }
+        for pair in self.resources.windows(2) {
+            if pair[0].path >= pair[1].path {
+                return Err(SkillError::InvalidSkill(
+                    "skill resources are not in canonical path order".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -195,4 +246,69 @@ pub struct ScoredSkill {
     pub digest: Hash,
     /// Canonical BM25 score.
     pub score: Bm25Score,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn skill(resources: Vec<SkillResource>) -> Skill {
+        Skill::new("demo", "Demo", "A demo skill", "Use it.", resources)
+    }
+
+    #[lyquid_test::test]
+    fn canonical_bytes_round_trip() {
+        let original = skill(vec![
+            SkillResource::new("scripts/run.sh", "echo run").unwrap(),
+        ]);
+        let bytes = original.canonical_bytes().unwrap();
+        let decoded = Skill::from_canonical_bytes(&bytes).unwrap();
+
+        assert_eq!(decoded, original);
+        assert_eq!(decoded.digest().unwrap(), original.digest().unwrap());
+    }
+
+    #[lyquid_test::test]
+    fn canonical_bytes_sort_resources() {
+        let first = SkillResource::new("a.txt", "a").unwrap();
+        let second = SkillResource::new("z.txt", "z").unwrap();
+        let unsorted = skill(vec![second.clone(), first.clone()]);
+        let sorted = skill(vec![first, second]);
+
+        assert_eq!(
+            unsorted.canonical_bytes().unwrap(),
+            sorted.canonical_bytes().unwrap()
+        );
+        assert_eq!(unsorted.digest().unwrap(), sorted.digest().unwrap());
+    }
+
+    #[lyquid_test::test]
+    fn resource_path_affects_skill_digest() {
+        let first = skill(vec![
+            SkillResource::new("scripts/run.sh", "echo run").unwrap(),
+        ]);
+        let second = skill(vec![
+            SkillResource::new("tools/run.sh", "echo run").unwrap(),
+        ]);
+
+        assert_ne!(first.digest().unwrap(), second.digest().unwrap());
+    }
+
+    #[lyquid_test::test]
+    fn rejects_unknown_canonical_version() {
+        let mut bytes = skill(Vec::new()).canonical_bytes().unwrap();
+        bytes[0] = 2;
+
+        assert!(Skill::from_canonical_bytes(&bytes).is_err());
+    }
+
+    #[lyquid_test::test]
+    fn rejects_duplicate_resource_paths() {
+        let duplicate = skill(vec![
+            SkillResource::new("a.txt", "first").unwrap(),
+            SkillResource::new("a.txt", "second").unwrap(),
+        ]);
+
+        assert!(duplicate.canonical_bytes().is_err());
+    }
 }

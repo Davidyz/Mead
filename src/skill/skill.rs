@@ -259,6 +259,12 @@ impl Skill {
     }
 
     /// Computes the canonical digest of the skill.
+    ///
+    /// The returned [`Hash`] is intended for local/off-chain use. When passing
+    /// it through a Lyquid contract method, convert it to
+    /// `lyquid::prelude::lyquor_primitives::HashBytes` with `.into()`; `Hash`
+    /// itself does not implement the serde traits required by Lyquid's postcard
+    /// encoding.
     pub fn digest(&self) -> SkillResult<Hash> {
         let bytes = self.canonical_bytes()?;
         let mut hasher = blake3::Hasher::new();

@@ -67,7 +67,6 @@ impl SkillManager {
     }
 
     /// Returns a skill by digest.
-    // TODO: expose an iterator/digest listing for user-facing skill enumeration.
     pub fn get(&self, digest: &Hash) -> Option<Arc<Skill>> {
         self.read_skills().get(digest).cloned()
     }
@@ -75,6 +74,20 @@ impl SkillManager {
     /// Returns `true` if a skill with the given digest is loaded.
     pub fn contains(&self, digest: &Hash) -> bool {
         self.read_skills().contains_key(digest)
+    }
+
+    /// Returns a deterministic snapshot of all loaded skills.
+    ///
+    /// Items are ordered by digest, and the iterator owns its snapshot so no
+    /// catalog lock is held while callers process the results.
+    pub fn iter(&self) -> impl Iterator<Item = (Hash, Arc<Skill>)> {
+        let mut snapshot: Vec<_> = self
+            .read_skills()
+            .iter()
+            .map(|(digest, skill)| (*digest, Arc::clone(skill)))
+            .collect();
+        snapshot.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        snapshot.into_iter()
     }
 
     /// Returns the canonical encoded bundle for a skill.
@@ -128,3 +141,40 @@ fn load_catalog(root: &Path) -> SkillResult<HashMap<Hash, Arc<Skill>>> {
 }
 
 // TODO: add fixture-based tests for load/refresh/bundle, duplicate digests, and singleton behavior.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skill::Skill;
+
+    #[lyquid_test::test]
+    fn iter_returns_a_snapshot_sorted_by_digest() {
+        let first = Arc::new(Skill::new(
+            "first",
+            "First",
+            "First skill",
+            "Instructions",
+            Vec::new(),
+        ));
+        let second = Arc::new(Skill::new(
+            "second",
+            "Second",
+            "Second skill",
+            "Instructions",
+            Vec::new(),
+        ));
+
+        let mut skills = new_hashmap();
+        skills.insert(second.digest().unwrap(), second);
+        skills.insert(first.digest().unwrap(), first);
+
+        let manager = SkillManager {
+            root: PathBuf::from("."),
+            skills: Arc::new(RwLock::new(skills)),
+        };
+
+        let items: Vec<_> = manager.iter().collect();
+        assert_eq!(items.len(), 2);
+        assert!(items[0].0.as_bytes() <= items[1].0.as_bytes());
+    }
+}

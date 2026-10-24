@@ -10,6 +10,9 @@ description = ""
 
 [dependencies]
 lyquid = { version = "0.8.0", features = ["ldk"] }
+markdown-frontmatter = { version = "0.5.1", default-features = false, features = ["yaml"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 
 [dev-dependencies]
 lyquid-test = { version = "0.8.0" }

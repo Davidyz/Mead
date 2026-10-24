@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::{SkillError, SkillResult};
 
 /// UTF-8 text content and its content digest.
+// TODO: add a bytes-backed resource type if skills need binary/non-UTF-8 assets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextFile {
     /// File contents.
@@ -32,6 +33,7 @@ impl TextFile {
     }
 
     /// Creates a text file from its contents.
+    // TODO: this currently cannot fail; simplify the signature or reserve it for future validation.
     pub fn new(contents: impl Into<String>) -> SkillResult<Self> {
         let contents = contents.into();
         let digest = HashBytes::from(blake3::hash(contents.as_bytes()));

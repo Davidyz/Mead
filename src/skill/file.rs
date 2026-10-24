@@ -57,6 +57,11 @@ impl TextFile {
     pub fn compute_digest(contents: &[u8]) -> Hash {
         blake3::hash(contents)
     }
+
+    /// Returns whether the stored digest matches the current contents.
+    pub fn verify(&self) -> bool {
+        self.digest == HashBytes::from(blake3::hash(self.contents.as_bytes()))
+    }
 }
 
 /// A skill resource: a relative path and its file contents.
@@ -87,6 +92,32 @@ impl SkillResource {
             file: TextFile::from_path(path)?,
         })
     }
+
+    /// Validates the relative path and content digest.
+    pub fn validate(&self) -> SkillResult<()> {
+        if !is_valid_relative_path(&self.path) {
+            return Err(SkillError::InvalidSkill(format!(
+                "invalid resource path: {}",
+                self.path
+            )));
+        }
+        if !self.file.verify() {
+            return Err(SkillError::InvalidSkill(format!(
+                "resource digest does not match contents: {}",
+                self.path
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn is_valid_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 /// Parsed YAML frontmatter from a Markdown skill file.
@@ -171,5 +202,21 @@ mod tests {
         assert_eq!(markdown.frontmatter().triggers, vec!["demo"]);
         assert_eq!(markdown.frontmatter().capabilities, vec!["testing"]);
         assert_eq!(markdown.body(), "Use this skill.\n");
+    }
+
+    #[lyquid_test::test]
+    fn text_file_digest_matches_contents() {
+        let file = TextFile::new("hello").unwrap();
+
+        assert!(file.verify());
+        assert_eq!(file.digest(), TextFile::compute_digest(b"hello"));
+    }
+
+    #[lyquid_test::test]
+    fn resource_validation_rejects_unsafe_paths() {
+        for path in ["/absolute", "../parent", "a/../../b", "a//b", "a\\b"] {
+            let resource = SkillResource::new(path, "contents").unwrap();
+            assert!(resource.validate().is_err(), "accepted unsafe path {path}");
+        }
     }
 }

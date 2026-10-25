@@ -1,7 +1,7 @@
 //! Process-wide access to the locally available skills.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use lyquid::prelude::{Hash, HashMap, new_hashmap};
 
@@ -9,7 +9,7 @@ use super::{ScoredSkill, Skill, SkillError, SkillResult};
 
 static SHARED: OnceLock<Arc<SkillManager>> = OnceLock::new();
 
-/// Read-only catalog of the skills available on this node.
+/// Catalog of the skills available on this node.
 #[derive(Debug, Clone)]
 pub struct SkillManager {
     root: Option<PathBuf>,
@@ -63,6 +63,15 @@ impl SkillManager {
         SHARED.get().ok_or(SkillError::NotInitialized)
     }
 
+    /// Appends a skill to the in-memory catalog.
+    ///
+    /// The skill is validated and its digest is computed before insertion.
+    /// Skills with an existing digest are ignored, matching catalog construction.
+    pub fn append(&self, skill: Skill) -> SkillResult<()> {
+        let mut skills = self.write_skills();
+        insert_skill(&mut skills, skill)
+    }
+
     /// Rescans the skill directory and replaces the in-memory catalog.
     ///
     /// Returns an error for managers created with [`Self::from_skills`], since
@@ -72,10 +81,7 @@ impl SkillManager {
             SkillError::InvalidSkill("refresh requires a filesystem-backed manager".into())
         })?;
         let skills = load_catalog(root)?;
-        *self
-            .skills
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = skills;
+        *self.write_skills() = skills;
         Ok(())
     }
 
@@ -144,6 +150,12 @@ impl SkillManager {
     fn read_skills(&self) -> RwLockReadGuard<'_, HashMap<Hash, Arc<Skill>>> {
         self.skills
             .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn write_skills(&self) -> RwLockWriteGuard<'_, HashMap<Hash, Arc<Skill>>> {
+        self.skills
+            .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
@@ -219,6 +231,39 @@ mod tests {
             SkillManager::from_skills([invalid]),
             Err(SkillError::InvalidSkill(_))
         ));
+    }
+
+    #[lyquid_test::test]
+    fn append_adds_skills_to_the_in_memory_catalog() {
+        let doc = load_doc_coauthoring();
+        let comms = load_internal_comms();
+        let comms_digest = comms.digest().unwrap();
+        let manager = manager_with(vec![doc.clone()]);
+
+        manager.append(comms.clone()).unwrap();
+        manager.append(doc).unwrap();
+
+        assert_eq!(manager.len(), 2);
+        assert_eq!(manager.get(&comms_digest).as_deref(), Some(&comms));
+    }
+
+    #[lyquid_test::test]
+    fn append_rejects_invalid_skills_without_changing_the_catalog() {
+        let resource = SkillResource::new("same.txt", "contents").unwrap();
+        let invalid = Skill::new(
+            "invalid",
+            "Invalid",
+            "Invalid skill",
+            "Instructions",
+            vec![resource.clone(), resource],
+        );
+        let manager = manager_with(vec![load_doc_coauthoring()]);
+
+        assert!(matches!(
+            manager.append(invalid),
+            Err(SkillError::InvalidSkill(_))
+        ));
+        assert_eq!(manager.len(), 1);
     }
 
     #[lyquid_test::test]

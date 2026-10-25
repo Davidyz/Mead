@@ -10,6 +10,9 @@ mod file;
 mod manager;
 mod skill;
 
+#[cfg(test)]
+mod test_support;
+
 pub use error::{SkillError, SkillResult};
 pub use file::{Frontmatter, MarkdownFile, SkillResource, TextFile};
 pub use manager::SkillManager;

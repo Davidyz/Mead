@@ -296,6 +296,102 @@ impl Skill {
         }
         Ok(())
     }
+
+    /// Decodes a skill from its JSON transport representation.
+    ///
+    /// JSON is a transport format only. The canonical digest is still computed
+    /// from the postcard-encoded skill.
+    pub fn from_json(json: &str) -> SkillResult<Self> {
+        Self::from_json_slice(json.as_bytes())
+    }
+
+    /// Decodes a skill from UTF-8 JSON bytes.
+    pub fn from_json_slice(bytes: &[u8]) -> SkillResult<Self> {
+        let encoded: SkillJson = serde_json::from_slice(bytes)
+            .map_err(|error| SkillError::InvalidSkill(format!("invalid skill JSON: {error}")))?;
+        encoded.into_skill()
+    }
+
+    /// Encodes the skill into its JSON transport representation.
+    pub fn to_json(&self) -> SkillResult<String> {
+        serde_json::to_string(&SkillJson::from_skill(self)).map_err(|error| {
+            SkillError::InvalidSkill(format!("failed to encode skill JSON: {error}"))
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SkillJson {
+    #[serde(default)]
+    id: String,
+    name: String,
+    description: String,
+    #[serde(default)]
+    triggers: Vec<String>,
+    instructions: String,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    extra: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    resources: Vec<SkillResourceJson>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SkillResourceJson {
+    path: String,
+    contents: String,
+}
+
+impl SkillJson {
+    fn from_skill(skill: &Skill) -> Self {
+        Self {
+            id: skill.id.clone(),
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            triggers: skill.triggers.clone(),
+            instructions: skill.instructions.clone(),
+            capabilities: skill.capabilities.clone(),
+            metadata: skill.metadata.clone(),
+            extra: skill.extra.clone(),
+            resources: skill
+                .resources
+                .iter()
+                .map(|resource| SkillResourceJson {
+                    path: resource.path.clone(),
+                    contents: resource.file.contents().to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    fn into_skill(self) -> SkillResult<Skill> {
+        let id = if self.id.trim().is_empty() {
+            self.name.clone()
+        } else {
+            self.id
+        };
+        let mut resources = Vec::with_capacity(self.resources.len());
+        for resource in self.resources {
+            resources.push(SkillResource::new(resource.path, resource.contents)?);
+        }
+
+        let skill = Skill {
+            id,
+            name: self.name,
+            description: self.description,
+            triggers: self.triggers,
+            instructions: self.instructions,
+            capabilities: self.capabilities,
+            metadata: self.metadata,
+            extra: self.extra,
+            resources,
+        };
+        skill.digest()?;
+        Ok(skill)
+    }
 }
 
 fn find_skill_md(dir: &Path) -> SkillResult<PathBuf> {
@@ -380,69 +476,13 @@ pub struct ScoredSkill {
 mod tests {
     use super::*;
     use crate::skill::TextFile;
+    use crate::skill::test_support::{
+        internal_comms_manifest, internal_comms_resources, load_doc_coauthoring,
+        load_internal_comms,
+    };
 
     fn skill(resources: Vec<SkillResource>) -> Skill {
         Skill::new("demo", "Demo", "A demo skill", "Use it.", resources)
-    }
-
-    fn load_doc_coauthoring() -> Skill {
-        let manifest = MarkdownFile::parse(
-            TextFile::new(include_str!(
-                "../../tests/skills/skills/doc-coauthoring/SKILL.md"
-            ))
-            .unwrap(),
-        )
-        .unwrap();
-        Skill::from_manifest(manifest, Vec::new())
-    }
-
-    fn load_internal_comms() -> Skill {
-        let mut resources = internal_comms_resources();
-        resources.sort_by(|left, right| left.path.cmp(&right.path));
-
-        Skill::from_manifest(internal_comms_manifest(), resources)
-    }
-
-    fn internal_comms_manifest() -> MarkdownFile {
-        MarkdownFile::parse(
-            TextFile::new(include_str!(
-                "../../tests/skills/skills/internal-comms/SKILL.md"
-            ))
-            .unwrap(),
-        )
-        .unwrap()
-    }
-
-    fn internal_comms_resources() -> Vec<SkillResource> {
-        vec![
-            SkillResource::new(
-                "examples/general-comms.md",
-                include_str!("../../tests/skills/skills/internal-comms/examples/general-comms.md"),
-            )
-            .unwrap(),
-            SkillResource::new(
-                "LICENSE.txt",
-                include_str!("../../tests/skills/skills/internal-comms/LICENSE.txt"),
-            )
-            .unwrap(),
-            SkillResource::new(
-                "examples/3p-updates.md",
-                include_str!("../../tests/skills/skills/internal-comms/examples/3p-updates.md"),
-            )
-            .unwrap(),
-            SkillResource::new(
-                "examples/company-newsletter.md",
-                include_str!(
-                    "../../tests/skills/skills/internal-comms/examples/company-newsletter.md"
-                ),
-            )
-            .unwrap(),
-            SkillResource::new(
-                "examples/faq-answers.md",
-                include_str!("../../tests/skills/skills/internal-comms/examples/faq-answers.md"),
-            )
-            .unwrap(),
-        ]
     }
 
     fn assert_real_skill_canonical_round_trip(fresh: Skill, reloaded: Skill) {
@@ -536,6 +576,48 @@ mod tests {
     fn canonical_bytes_round_trip_real_skills() {
         assert_real_skill_canonical_round_trip(load_doc_coauthoring(), load_doc_coauthoring());
         assert_real_skill_canonical_round_trip(load_internal_comms(), load_internal_comms());
+    }
+
+    #[lyquid_test::test]
+    fn json_round_trip_real_skills() {
+        for skill in [load_doc_coauthoring(), load_internal_comms()] {
+            let json = skill.to_json().unwrap();
+            let decoded = Skill::from_json(&json).unwrap();
+            assert_eq!(decoded, skill);
+        }
+    }
+
+    #[lyquid_test::test]
+    fn json_uses_name_as_id_when_absent() {
+        let json = r#"{
+            "name": "json-skill",
+            "description": "A JSON skill.",
+            "instructions": "Use it.",
+            "resources": []
+        }"#;
+        let skill = Skill::from_json(json).unwrap();
+
+        assert_eq!(skill.id, "json-skill");
+        assert_eq!(skill.name, skill.id);
+    }
+
+    #[lyquid_test::test]
+    fn json_rejects_invalid_skills() {
+        let invalid_path = r#"{
+            "name": "json-skill",
+            "description": "A JSON skill.",
+            "instructions": "Use it.",
+            "resources": [{"path": "../escape", "contents": "nope"}]
+        }"#;
+
+        assert!(matches!(
+            Skill::from_json(invalid_path),
+            Err(SkillError::InvalidSkill(_))
+        ));
+        assert!(matches!(
+            Skill::from_json("{"),
+            Err(SkillError::InvalidSkill(_))
+        ));
     }
 
     #[lyquid_test::test]

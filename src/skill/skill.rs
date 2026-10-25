@@ -378,29 +378,198 @@ pub struct ScoredSkill {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skill::TextFile;
 
     fn skill(resources: Vec<SkillResource>) -> Skill {
         Skill::new("demo", "Demo", "A demo skill", "Use it.", resources)
     }
 
-    #[lyquid_test::test]
-    fn canonical_bytes_round_trip() {
-        let original = skill(vec![
-            SkillResource::new("scripts/run.sh", "echo run").unwrap(),
-        ]);
-        let bytes = original.canonical_bytes().unwrap();
+    fn load_doc_coauthoring() -> Skill {
+        let manifest = MarkdownFile::parse(
+            TextFile::new(include_str!(
+                "../../tests/skills/skills/doc-coauthoring/SKILL.md"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        Skill::from_manifest(manifest, Vec::new())
+    }
+
+    fn load_internal_comms() -> Skill {
+        let mut resources = internal_comms_resources();
+        resources.sort_by(|left, right| left.path.cmp(&right.path));
+
+        Skill::from_manifest(internal_comms_manifest(), resources)
+    }
+
+    fn internal_comms_manifest() -> MarkdownFile {
+        MarkdownFile::parse(
+            TextFile::new(include_str!(
+                "../../tests/skills/skills/internal-comms/SKILL.md"
+            ))
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn internal_comms_resources() -> Vec<SkillResource> {
+        vec![
+            SkillResource::new(
+                "examples/general-comms.md",
+                include_str!("../../tests/skills/skills/internal-comms/examples/general-comms.md"),
+            )
+            .unwrap(),
+            SkillResource::new(
+                "LICENSE.txt",
+                include_str!("../../tests/skills/skills/internal-comms/LICENSE.txt"),
+            )
+            .unwrap(),
+            SkillResource::new(
+                "examples/3p-updates.md",
+                include_str!("../../tests/skills/skills/internal-comms/examples/3p-updates.md"),
+            )
+            .unwrap(),
+            SkillResource::new(
+                "examples/company-newsletter.md",
+                include_str!(
+                    "../../tests/skills/skills/internal-comms/examples/company-newsletter.md"
+                ),
+            )
+            .unwrap(),
+            SkillResource::new(
+                "examples/faq-answers.md",
+                include_str!("../../tests/skills/skills/internal-comms/examples/faq-answers.md"),
+            )
+            .unwrap(),
+        ]
+    }
+
+    fn assert_real_skill_canonical_round_trip(fresh: Skill, reloaded: Skill) {
+        let bytes = fresh.canonical_bytes().unwrap();
         let decoded = Skill::from_canonical_bytes(&bytes).unwrap();
 
-        assert_eq!(decoded, original);
-        assert_eq!(decoded.digest().unwrap(), original.digest().unwrap());
+        assert_eq!(decoded, reloaded);
+        assert_eq!(decoded.id, reloaded.id);
+        assert_eq!(decoded.name, reloaded.name);
+        assert_eq!(decoded.description, reloaded.description);
+        assert_eq!(decoded.triggers, reloaded.triggers);
+        assert_eq!(decoded.instructions, reloaded.instructions);
+        assert_eq!(decoded.capabilities, reloaded.capabilities);
+        assert_eq!(decoded.metadata, reloaded.metadata);
+        assert_eq!(decoded.extra, reloaded.extra);
+        assert_eq!(decoded.resources.len(), reloaded.resources.len());
+        for (decoded_resource, reloaded_resource) in
+            decoded.resources.iter().zip(&reloaded.resources)
+        {
+            assert_eq!(decoded_resource.path, reloaded_resource.path);
+            assert_eq!(
+                decoded_resource.file.contents(),
+                reloaded_resource.file.contents()
+            );
+            assert_eq!(
+                decoded_resource.file.digest(),
+                reloaded_resource.file.digest()
+            );
+        }
+        assert_eq!(decoded.canonical_bytes().unwrap(), bytes);
+        assert_eq!(decoded.digest().unwrap(), reloaded.digest().unwrap());
+    }
+
+    #[lyquid_test::test]
+    fn parses_real_catalog_manifest() {
+        let skill = load_doc_coauthoring();
+
+        assert_eq!(skill.id, "doc-coauthoring");
+        assert_eq!(skill.name, "doc-coauthoring");
+        assert!(
+            skill
+                .description
+                .starts_with("Guide users through a structured workflow")
+        );
+        assert!(
+            skill
+                .instructions
+                .starts_with("\n# Doc Co-Authoring Workflow")
+        );
+        assert!(skill.resources.is_empty());
+    }
+
+    #[lyquid_test::test]
+    fn loads_real_catalog_resources() {
+        let skill = load_internal_comms();
+
+        assert_eq!(skill.name, "internal-comms");
+        assert_eq!(skill.id, skill.name);
+        assert!(
+            skill
+                .resources
+                .iter()
+                .all(|r| !r.file.contents().is_empty())
+        );
+
+        let mut paths: Vec<_> = skill
+            .resources
+            .iter()
+            .map(|resource| resource.path.as_str())
+            .collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "LICENSE.txt",
+                "examples/3p-updates.md",
+                "examples/company-newsletter.md",
+                "examples/faq-answers.md",
+                "examples/general-comms.md",
+            ]
+        );
+
+        let mut sorted = skill.clone();
+        sorted
+            .resources
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        assert_eq!(skill.digest().unwrap(), sorted.digest().unwrap());
+    }
+
+    #[lyquid_test::test]
+    fn canonical_bytes_round_trip_real_skills() {
+        assert_real_skill_canonical_round_trip(load_doc_coauthoring(), load_doc_coauthoring());
+        assert_real_skill_canonical_round_trip(load_internal_comms(), load_internal_comms());
+    }
+
+    #[lyquid_test::test]
+    fn uses_name_as_id_when_absent() {
+        let manifest = MarkdownFile::parse(
+            TextFile::new(
+                "---\nname: inline-skill\ndescription: An inline skill.\n---\n\nInline body.\n",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let skill = Skill::from_manifest(manifest, Vec::new());
+
+        assert_eq!(skill.name, "inline-skill");
+        assert_eq!(skill.id, skill.name);
+    }
+
+    #[lyquid_test::test]
+    fn rejects_invalid_frontmatter() {
+        let error =
+            MarkdownFile::parse(TextFile::new("---\nname: [unterminated\n---\n\nBody.\n").unwrap())
+                .unwrap_err();
+
+        assert!(matches!(error, SkillError::InvalidFrontmatter(_)));
     }
 
     #[lyquid_test::test]
     fn canonical_bytes_sort_resources() {
-        let first = SkillResource::new("a.txt", "a").unwrap();
-        let second = SkillResource::new("z.txt", "z").unwrap();
-        let unsorted = skill(vec![second.clone(), first.clone()]);
-        let sorted = skill(vec![first, second]);
+        let mut sorted = internal_comms_resources();
+        sorted.sort_by(|left, right| left.path.cmp(&right.path));
+        let mut unsorted = sorted.clone();
+        unsorted.reverse();
+
+        let unsorted = Skill::from_manifest(internal_comms_manifest(), unsorted);
+        let sorted = Skill::from_manifest(internal_comms_manifest(), sorted);
 
         assert_eq!(
             unsorted.canonical_bytes().unwrap(),
@@ -411,12 +580,9 @@ mod tests {
 
     #[lyquid_test::test]
     fn resource_path_affects_skill_digest() {
-        let first = skill(vec![
-            SkillResource::new("scripts/run.sh", "echo run").unwrap(),
-        ]);
-        let second = skill(vec![
-            SkillResource::new("tools/run.sh", "echo run").unwrap(),
-        ]);
+        let first = load_internal_comms();
+        let mut second = first.clone();
+        second.resources[0].path = "LICENSE.md".into();
 
         assert_ne!(first.digest().unwrap(), second.digest().unwrap());
     }

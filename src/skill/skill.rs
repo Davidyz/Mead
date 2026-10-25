@@ -226,6 +226,12 @@ impl Skill {
     }
 
     /// Encodes the skill into its canonical byte representation.
+    ///
+    /// This versioned, deterministic encoding defines skill identity and is the
+    /// input to [`Self::digest`].
+    ///
+    /// **Do not use this as an HTTP transport format; use [`Self::to_json`]
+    /// instead.**
     pub fn canonical_bytes(&self) -> SkillResult<Vec<u8>> {
         let canonical = self.canonicalized()?;
         let encoded = postcard::to_allocvec(&canonical)
@@ -238,6 +244,8 @@ impl Skill {
     }
 
     /// Decodes a skill from its canonical byte representation.
+    ///
+    /// **Do not use this to decode JSON; use [`Self::from_json`] instead.**
     pub fn from_canonical_bytes(bytes: &[u8]) -> SkillResult<Self> {
         let (&version, encoded) = bytes
             .split_first()
@@ -299,13 +307,19 @@ impl Skill {
 
     /// Decodes a skill from its JSON transport representation.
     ///
-    /// JSON is a transport format only. The canonical digest is still computed
-    /// from the postcard-encoded skill.
+    /// JSON is a transport format only; the canonical digest is still computed
+    /// from [`Self::canonical_bytes`].
+    ///
+    /// **Do not use JSON for digest or identity; use [`Self::canonical_bytes`]
+    /// or [`Self::digest`] instead.**
     pub fn from_json(json: &str) -> SkillResult<Self> {
         Self::from_json_slice(json.as_bytes())
     }
 
     /// Decodes a skill from UTF-8 JSON bytes.
+    ///
+    /// **Do not use JSON for digest or identity; use [`Self::canonical_bytes`]
+    /// or [`Self::digest`] instead.**
     pub fn from_json_slice(bytes: &[u8]) -> SkillResult<Self> {
         let encoded: SkillJson = serde_json::from_slice(bytes)
             .map_err(|error| SkillError::InvalidSkill(format!("invalid skill JSON: {error}")))?;
@@ -313,6 +327,9 @@ impl Skill {
     }
 
     /// Encodes the skill into its JSON transport representation.
+    ///
+    /// **Do not use this for digest or identity; use [`Self::canonical_bytes`]
+    /// or [`Self::digest`] instead.**
     pub fn to_json(&self) -> SkillResult<String> {
         serde_json::to_string(&SkillJson::from_skill(self)).map_err(|error| {
             SkillError::InvalidSkill(format!("failed to encode skill JSON: {error}"))

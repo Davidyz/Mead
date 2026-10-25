@@ -1,8 +1,8 @@
-//! Off-chain skill loading, canonicalization, and lookup.
+//! Off-chain skill parsing, canonicalization, and lookup.
 //!
-//! Skills are loaded from disk, split into their Markdown manifest and resource
-//! files, and exposed through a read-only [`SkillManager`]. The manager is also
-//! available as a process-wide singleton via [`SkillManager::init_shared`] and
+//! Skills are parsed from Markdown manifests and text resource files, then
+//! exposed through a [`SkillManager`]. The manager is also available as a
+//! process-wide singleton via [`SkillManager::init_shared`] and
 //! [`SkillManager::shared`].
 
 mod error;

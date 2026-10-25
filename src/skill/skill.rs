@@ -1,7 +1,6 @@
 //! A complete skill and its canonical representation.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use lyquid::prelude::Hash;
 use lyquid::prelude::blake3;
@@ -105,8 +104,7 @@ pub type Bm25Score = i64;
 
 /// A skill together with its searchable metadata and resource files.
 ///
-/// The layout follows `skill_core::Skill`, with the local filesystem `path`
-/// deliberately omitted because it must not affect the canonical digest.
+/// The layout follows `skill_core::Skill`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skill {
     /// Stable skill identifier.
@@ -150,19 +148,6 @@ impl Skill {
             extra: BTreeMap::new(),
             resources,
         }
-    }
-
-    /// Loads a skill directory by discovering and parsing its `SKILL.md`.
-    ///
-    /// All other regular text files in the directory are loaded as resources.
-    /// Hidden files and directories are ignored. Non-text/binary resources are
-    /// not supported and cause loading to fail.
-    pub fn from_dir(dir: impl AsRef<Path>) -> SkillResult<Self> {
-        let dir = dir.as_ref();
-        let manifest_path = find_skill_md(dir)?;
-        let manifest = MarkdownFile::from_path(&manifest_path)?;
-        let resources = load_resources(dir)?;
-        Ok(Self::from_manifest(manifest, resources))
     }
 
     /// Creates a skill from a parsed Markdown manifest and resource files.
@@ -409,75 +394,6 @@ impl SkillJson {
         skill.digest()?;
         Ok(skill)
     }
-}
-
-fn find_skill_md(dir: &Path) -> SkillResult<PathBuf> {
-    let exact = dir.join("SKILL.md");
-    if exact.is_file() {
-        return Ok(exact);
-    }
-
-    let mut candidates = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-
-        let name = entry.file_name();
-        if name
-            .to_str()
-            .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
-        {
-            candidates.push(entry.path());
-        }
-    }
-
-    match candidates.len() {
-        0 => Err(SkillError::InvalidSkill(format!(
-            "no SKILL.md found in {}",
-            dir.display()
-        ))),
-        1 => Ok(candidates.remove(0)),
-        _ => Err(SkillError::InvalidSkill(format!(
-            "multiple case-insensitive SKILL.md candidates in {}",
-            dir.display()
-        ))),
-    }
-}
-
-fn load_resources(root: &Path) -> SkillResult<Vec<SkillResource>> {
-    let mut resources = Vec::new();
-    collect_resources(root, root, &mut resources)?;
-    resources.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(resources)
-}
-
-fn collect_resources(
-    root: &Path,
-    dir: &Path,
-    resources: &mut Vec<SkillResource>,
-) -> SkillResult<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') {
-            continue;
-        }
-
-        let file_type = entry.file_type()?;
-        let path = entry.path();
-        if file_type.is_dir() {
-            collect_resources(root, &path, resources)?;
-        } else if file_type.is_file() && !name.eq_ignore_ascii_case("SKILL.md") {
-            let relative = path.strip_prefix(root).unwrap_or(&path);
-            let relative = relative.to_string_lossy().replace('\\', "/");
-            resources.push(SkillResource::from_path(&path, relative)?);
-        }
-    }
-
-    Ok(())
 }
 
 /// A skill digest and its canonical BM25 score.

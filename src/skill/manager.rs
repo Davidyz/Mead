@@ -1,6 +1,5 @@
 //! Process-wide access to the locally available skills.
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use lyquid::prelude::{Hash, HashMap, new_hashmap};
@@ -12,7 +11,6 @@ static SHARED: OnceLock<Arc<SkillManager>> = OnceLock::new();
 /// Catalog of the skills available on this node.
 #[derive(Debug, Clone)]
 pub struct SkillManager {
-    root: Option<PathBuf>,
     skills: Arc<RwLock<HashMap<Hash, Arc<Skill>>>>,
 }
 
@@ -26,32 +24,15 @@ impl SkillManager {
         for skill in skills {
             insert_skill(&mut catalog, skill)?;
         }
-        Ok(Self::from_catalog(None, catalog))
+        Ok(Self {
+            skills: Arc::new(RwLock::new(catalog)),
+        })
     }
 
-    /// Loads all skills under `root`.
-    ///
-    /// Skills containing non-text resources are skipped because canonical v1
-    /// only supports UTF-8 text.
-    pub fn load(root: impl Into<PathBuf>) -> SkillResult<Self> {
-        let root = root.into();
-        let skills = load_catalog(&root)?;
-        Ok(Self::from_catalog(Some(root), skills))
-    }
-
-    fn from_catalog(root: Option<PathBuf>, skills: HashMap<Hash, Arc<Skill>>) -> Self {
-        Self {
-            root,
-            skills: Arc::new(RwLock::new(skills)),
-        }
-    }
-
-    /// Loads all skills and installs the manager as the process-wide singleton.
-    pub fn init_shared(root: impl Into<PathBuf>) -> SkillResult<Arc<Self>> {
-        Self::install_shared(Arc::new(Self::load(root)?))
-    }
-
-    fn install_shared(manager: Arc<Self>) -> SkillResult<Arc<Self>> {
+    /// Builds a catalog from already-loaded skills and installs it as the
+    /// process-wide singleton.
+    pub fn init_shared(skills: impl IntoIterator<Item = Skill>) -> SkillResult<Arc<Self>> {
+        let manager = Arc::new(Self::from_skills(skills)?);
         SHARED
             .set(Arc::clone(&manager))
             .map_err(|_| SkillError::AlreadyInitialized)?;
@@ -63,32 +44,13 @@ impl SkillManager {
         SHARED.get().ok_or(SkillError::NotInitialized)
     }
 
-    /// Appends a skill to the in-memory catalog.
+    /// Appends a skill to the catalog.
     ///
     /// The skill is validated and its digest is computed before insertion.
     /// Skills with an existing digest are ignored, matching catalog construction.
     pub fn append(&self, skill: Skill) -> SkillResult<()> {
         let mut skills = self.write_skills();
         insert_skill(&mut skills, skill)
-    }
-
-    /// Rescans the skill directory and replaces the in-memory catalog.
-    ///
-    /// Returns an error for managers created with [`Self::from_skills`], since
-    /// they have no backing directory to rescan.
-    pub fn refresh(&self) -> SkillResult<()> {
-        let root = self.root.as_deref().ok_or_else(|| {
-            SkillError::InvalidSkill("refresh requires a filesystem-backed manager".into())
-        })?;
-        let skills = load_catalog(root)?;
-        *self.write_skills() = skills;
-        Ok(())
-    }
-
-    /// Returns the root directory scanned by this manager, if it was loaded
-    /// from a filesystem.
-    pub fn root(&self) -> Option<&Path> {
-        self.root.as_deref()
     }
 
     /// Returns the number of loaded skills.
@@ -160,32 +122,8 @@ impl SkillManager {
     }
 }
 
-fn load_catalog(root: &Path) -> SkillResult<HashMap<Hash, Arc<Skill>>> {
-    // TODO: skip/report malformed or hidden child directories instead of failing the whole catalog.
-    let mut directories = Vec::new();
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            directories.push(entry.path());
-        }
-    }
-    directories.sort();
-
-    let mut skills = new_hashmap();
-    for directory in directories {
-        let skill = match Skill::from_dir(&directory) {
-            Ok(skill) => skill,
-            Err(SkillError::NonTextFile(_)) => continue,
-            Err(error) => return Err(error),
-        };
-        insert_skill(&mut skills, skill)?;
-    }
-    Ok(skills)
-}
-
 fn insert_skill(catalog: &mut HashMap<Hash, Arc<Skill>>, skill: Skill) -> SkillResult<()> {
     let digest = skill.digest()?;
-    // TODO: document/verify duplicate skill digests from different directories.
     catalog.entry(digest).or_insert_with(|| Arc::new(skill));
     Ok(())
 }
@@ -209,7 +147,6 @@ mod tests {
 
         let manager = SkillManager::from_skills(vec![doc.clone(), comms, doc.clone()]).unwrap();
 
-        assert_eq!(manager.root(), None);
         assert_eq!(manager.len(), 2);
         assert!(manager.contains(&doc_digest));
         assert!(manager.contains(&comms_digest));
@@ -267,17 +204,6 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    fn refresh_requires_a_filesystem_backed_manager() {
-        let manager = SkillManager::from_skills([]).unwrap();
-
-        assert!(manager.is_empty());
-        assert!(matches!(
-            manager.refresh(),
-            Err(SkillError::InvalidSkill(_))
-        ));
-    }
-
-    #[lyquid_test::test]
     fn iter_returns_a_snapshot_sorted_by_digest() {
         let doc = load_doc_coauthoring();
         let comms = load_internal_comms();
@@ -320,12 +246,11 @@ mod tests {
             Err(SkillError::NotInitialized)
         ));
 
-        let manager = Arc::new(manager_with(vec![load_doc_coauthoring()]));
-        let installed = SkillManager::install_shared(Arc::clone(&manager)).unwrap();
+        let manager = SkillManager::init_shared(vec![load_doc_coauthoring()]).unwrap();
 
-        assert!(Arc::ptr_eq(&installed, SkillManager::shared().unwrap()));
+        assert!(Arc::ptr_eq(&manager, SkillManager::shared().unwrap()));
         assert!(matches!(
-            SkillManager::install_shared(manager),
+            SkillManager::init_shared([]),
             Err(SkillError::AlreadyInitialized)
         ));
     }

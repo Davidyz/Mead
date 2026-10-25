@@ -1,12 +1,11 @@
-//! File-backed skill contents.
+//! Skill file contents.
 //!
-//! [`TextFile`] owns the raw bytes of a file together with its content digest.
+//! [`TextFile`] owns text content together with its content digest.
 //! [`SkillResource`] attaches a relative path to a [`TextFile`].
 //! [`MarkdownFile`] is a [`TextFile`] that has been split into YAML frontmatter
 //! and Markdown body.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use lyquid::prelude::Hash;
 use lyquid::prelude::blake3;
@@ -16,10 +15,6 @@ use serde::{Deserialize, Serialize};
 use super::{SkillError, SkillResult};
 
 /// UTF-8 text content and its content digest.
-// TODO: support binary/non-UTF-8 assets. `TextFile` requires UTF-8, so skills
-// containing binary resources fail to load individually; `SkillManager` skips
-// such skills. Decide the canonical representation before changing the v1
-// resource schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextFile {
     /// File contents.
@@ -29,17 +24,6 @@ pub struct TextFile {
 }
 
 impl TextFile {
-    /// Loads text content from disk.
-    ///
-    /// Files that are not valid UTF-8 are rejected with [`SkillError::NonTextFile`].
-    pub fn from_path(path: impl AsRef<Path>) -> SkillResult<Self> {
-        let path = path.as_ref();
-        let bytes = std::fs::read(path)?;
-        let contents =
-            String::from_utf8(bytes).map_err(|_| SkillError::NonTextFile(path.to_path_buf()))?;
-        Self::new(contents)
-    }
-
     /// Creates a text file from its contents.
     // TODO: this currently cannot fail; simplify the signature or reserve it for future validation.
     pub fn new(contents: impl Into<String>) -> SkillResult<Self> {
@@ -89,17 +73,6 @@ impl SkillResource {
         Ok(Self {
             path: path.into(),
             file: TextFile::new(contents)?,
-        })
-    }
-
-    /// Loads a resource from disk while storing a relative path.
-    pub fn from_path(
-        path: impl AsRef<Path>,
-        relative_path: impl Into<String>,
-    ) -> SkillResult<Self> {
-        Ok(Self {
-            path: relative_path.into(),
-            file: TextFile::from_path(path)?,
         })
     }
 
@@ -174,11 +147,6 @@ impl MarkdownFile {
             frontmatter,
             body,
         })
-    }
-
-    /// Loads and parses a Markdown file from disk.
-    pub fn from_path(path: impl AsRef<Path>) -> SkillResult<Self> {
-        Self::parse(TextFile::from_path(path)?)
     }
 
     /// Returns the underlying text file.

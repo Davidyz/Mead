@@ -19,3 +19,6 @@ Cargo.lock
 *.pdb
 
 lyquid_tools_target
+
+# Skill artifacts dir for testing
+tests/skills

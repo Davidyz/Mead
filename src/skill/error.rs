@@ -1,6 +1,7 @@
 //! Errors returned by the skill module.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use lyquid::prelude::Hash;
 
@@ -12,6 +13,8 @@ pub type SkillResult<T> = Result<T, SkillError>;
 pub enum SkillError {
     /// A filesystem operation failed.
     Io(std::io::Error),
+    /// A skill file is not valid UTF-8 text.
+    NonTextFile(PathBuf),
     /// The Markdown frontmatter is missing or malformed.
     InvalidFrontmatter(String),
     /// The skill contents are not valid.
@@ -30,6 +33,9 @@ impl fmt::Display for SkillError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(f, "skill I/O error: {error}"),
+            Self::NonTextFile(path) => {
+                write!(f, "skill file is not valid UTF-8 text: {}", path.display())
+            }
             Self::InvalidFrontmatter(message) => {
                 write!(f, "invalid skill frontmatter: {message}")
             }

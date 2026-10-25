@@ -18,6 +18,9 @@ pub struct SkillManager {
 
 impl SkillManager {
     /// Loads all skills under `root`.
+    ///
+    /// Skills containing non-text resources are skipped because canonical v1
+    /// only supports UTF-8 text.
     pub fn load(root: impl Into<PathBuf>) -> SkillResult<Self> {
         let root = root.into();
         let skills = load_catalog(&root)?;
@@ -132,7 +135,11 @@ fn load_catalog(root: &Path) -> SkillResult<HashMap<Hash, Arc<Skill>>> {
 
     let mut skills = new_hashmap();
     for directory in directories {
-        let skill = Skill::from_dir(&directory)?;
+        let skill = match Skill::from_dir(&directory) {
+            Ok(skill) => skill,
+            Err(SkillError::NonTextFile(_)) => continue,
+            Err(error) => return Err(error),
+        };
         let digest = skill.digest()?;
         // TODO: document/verify duplicate skill digests from different directories.
         skills.entry(digest).or_insert_with(|| Arc::new(skill));

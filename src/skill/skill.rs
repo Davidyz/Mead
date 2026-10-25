@@ -155,7 +155,8 @@ impl Skill {
     /// Loads a skill directory by discovering and parsing its `SKILL.md`.
     ///
     /// All other regular text files in the directory are loaded as resources.
-    /// Hidden files and directories are ignored.
+    /// Hidden files and directories are ignored. Non-text/binary resources are
+    /// not supported and cause loading to fail.
     pub fn from_dir(dir: impl AsRef<Path>) -> SkillResult<Self> {
         let dir = dir.as_ref();
         let manifest_path = find_skill_md(dir)?;

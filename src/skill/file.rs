@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use super::{SkillError, SkillResult};
 
 /// UTF-8 text content and its content digest.
-// TODO: add a bytes-backed resource type if skills need binary/non-UTF-8 assets.
+// TODO: support binary/non-UTF-8 assets. `TextFile` requires UTF-8, so skills
+// containing binary resources fail to load individually; `SkillManager` skips
+// such skills. Decide the canonical representation before changing the v1
+// resource schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextFile {
     /// File contents.
@@ -27,8 +30,13 @@ pub struct TextFile {
 
 impl TextFile {
     /// Loads text content from disk.
+    ///
+    /// Files that are not valid UTF-8 are rejected with [`SkillError::NonTextFile`].
     pub fn from_path(path: impl AsRef<Path>) -> SkillResult<Self> {
-        let contents = std::fs::read_to_string(path)?;
+        let path = path.as_ref();
+        let bytes = std::fs::read(path)?;
+        let contents =
+            String::from_utf8(bytes).map_err(|_| SkillError::NonTextFile(path.to_path_buf()))?;
         Self::new(contents)
     }
 

@@ -9,6 +9,8 @@ This repository is hosted on GitHub.
 Use the `gh` CLI or the repo URL `https://github.com/Davidyz/Mead` to read the issues and/or pull requests when needed.
 A high-level project design is available in issue 1 (`https://github.com/Davidyz/Mead/issues/1`).
 
+You should also refer to `./CONTRIBUTING.md` and other documentation in this repo for instructions.
+
 # External Resourses
 
 - See the Lyquor documentation at `https://docs.rs/lyquid/latest/lyquid/index.html`.

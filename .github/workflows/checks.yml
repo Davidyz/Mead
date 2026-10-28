@@ -1,10 +1,19 @@
-name: "Linting and Tests"
+name: "Rust Formatting, Linting and Tests"
 on:
   push:
+    paths:
+      - "**/*.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - "Makefile"
+      - "scripts/**"
+      - ".github/workflows/checks.yml"
 
 jobs:
   ci:
-    name: Linting and Tests
+    name: Rust Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

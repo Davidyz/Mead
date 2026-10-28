@@ -1,0 +1,34 @@
+name: "Linting and Tests"
+on:
+  push:
+
+jobs:
+  ci:
+    name: Linting and Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Ensure rustfmt is installed and setup problem matcher
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+
+      - name: Install LDK
+        run: |
+          curl ldk.lyquor.dev -L | bash
+          echo "$HOME/.shakenup/bin/" >> $GITHUB_PATH
+          cargo fetch
+
+      - name: Rustfmt Check
+        uses: actions-rust-lang/rustfmt@v1
+
+      - name: Check lyquid crate version matches LDK version
+        run: |
+          cargo info lyquid
+          make check-ldk
+
+      - name: Start lyquor network
+        run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
+
+      - name: Run shaker tests
+        run: shaker test Cargo.toml

@@ -1,6 +1,6 @@
-﻿//! On-chain search result data structures.
+//! On-chain search result data structures.
 //!
-//! When a peer node `X岬 receives a search request, it runs a local search and
+//! When a peer node `X岬?receives a search request, it runs a local search and
 //! submits a `SignedResult` to the chain. The result includes a Merkle tree root
 //! over the matched skills for efficient verification.
 
@@ -119,7 +119,7 @@ impl SkillMatch {
     }
 }
 
-/// A signed search result submitted on-chain by a peer node `X岬.
+/// A signed search result submitted on-chain by a peer node `X岬?
 ///
 /// The result contains a list of matched skills with BM25 scores, a Merkle
 /// tree root for efficient verification, and a signature by the submitting
@@ -144,9 +144,9 @@ pub struct SignedResult {
     pub merkle_root: Hash,
     /// UTC timestamp of when the result was submitted, in seconds since the Unix epoch.
     pub timestamp: u64,
-    /// Address of the submitting peer node `X岬.
+    /// Address of the submitting peer node `X岬?
     pub sender: Address,
-    /// Signature over [`SignedResult::signing_payload`] by `X岬.
+    /// Signature over [`SignedResult::signing_payload`] by `X岬?
     pub signature: Vec<u8>,
 }
 
@@ -287,17 +287,6 @@ impl SignedResult {
             timestamp,
             sender,
         ))
-    }
-
-    /// Returns the canonical bytes covered by this result's signature.
-    pub fn signing_payload(&self) -> Vec<u8> {
-        result_signing_payload(
-            self.query_id,
-            self.merkle_root,
-            self.matches.len(),
-            self.timestamp,
-            self.sender,
-        )
     }
 
     /// Validates the result independently of its query.

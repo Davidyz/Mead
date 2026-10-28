@@ -1,6 +1,6 @@
-﻿//! On-chain search query data structures.
+//! On-chain search query data structures.
 //!
-//! When a node `X鈧€` initiates a search, it submits a `SignedQuery` to the chain.
+//! When a node `X鈧€ initiates a search, it submits a `SignedQuery` to the chain.
 //! The query ID is stored on-chain so peers can verify they are responding to the
 //! same search, including its parameters, timestamp, and sender.
 
@@ -145,7 +145,7 @@ pub fn query_signing_payload(
     payload
 }
 
-/// A signed search query submitted on-chain by the querying node `X鈧€`.
+/// A signed search query submitted on-chain by the querying node `X鈧€.
 ///
 /// The query ID commits to the query text digest, parameters, timestamp, and
 /// sender. Peers bind their results to this ID.
@@ -167,9 +167,9 @@ pub struct SignedQuery {
     pub params: QueryParams,
     /// UTC timestamp of when the query was created, in seconds since the Unix epoch.
     pub timestamp: u64,
-    /// Address of the querying node `X鈧€`.
+    /// Address of the querying node `X鈧€.
     pub sender: Address,
-    /// Signature over [`SignedQuery::signing_payload`] by `X鈧€`.
+    /// Signature over [`SignedQuery::signing_payload`] by `X鈧€.
     pub signature: Vec<u8>,
 }
 
@@ -230,11 +230,6 @@ impl SignedQuery {
         };
         query.validate()?;
         Ok(query)
-    }
-
-    /// Returns the canonical bytes covered by this query's signature.
-    pub fn signing_payload(&self) -> Vec<u8> {
-        query_signing_payload(self.query_digest, &self.params, self.timestamp, self.sender)
     }
 
     /// Validates the query's fields and its derived query ID.

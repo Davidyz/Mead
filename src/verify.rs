@@ -1,4 +1,4 @@
-//! Host-backed signature verification and caller authorization.
+﻿//! Host-backed signature verification and caller authorization.
 //!
 //! The crypto backend lives here rather than in `types/` so the on-chain
 //! data structures stay independent of it.
@@ -8,7 +8,7 @@ use lyquid::prelude::lyquor_api;
 use lyquid::prelude::lyquor_primitives::{Address, Bytes, Cipher};
 
 use crate::types::invalid_input;
-use crate::types::{CanonicalBytes, Signed, SignedQuery, SignedResult};
+use crate::types::{CanonicalBytes, Signed};
 
 /// Verifies any signed item implementing [`Signed`] + [`CanonicalBytes`].
 ///

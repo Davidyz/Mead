@@ -1,6 +1,6 @@
-//! On-chain search result data structures.
+﻿//! On-chain search result data structures.
 //!
-//! When a peer node `Xᵢ` receives a search request, it runs a local search and
+//! When a peer node `X岬 receives a search request, it runs a local search and
 //! submits a `SignedResult` to the chain. The result includes a Merkle tree root
 //! over the matched skills for efficient verification.
 
@@ -119,7 +119,7 @@ impl SkillMatch {
     }
 }
 
-/// A signed search result submitted on-chain by a peer node `Xᵢ`.
+/// A signed search result submitted on-chain by a peer node `X岬.
 ///
 /// The result contains a list of matched skills with BM25 scores, a Merkle
 /// tree root for efficient verification, and a signature by the submitting
@@ -144,9 +144,9 @@ pub struct SignedResult {
     pub merkle_root: Hash,
     /// UTC timestamp of when the result was submitted, in seconds since the Unix epoch.
     pub timestamp: u64,
-    /// Address of the submitting peer node `Xᵢ`.
+    /// Address of the submitting peer node `X岬.
     pub sender: Address,
-    /// Signature over [`SignedResult::signing_payload`] by `Xᵢ`.
+    /// Signature over [`SignedResult::signing_payload`] by `X岬.
     pub signature: Vec<u8>,
 }
 
@@ -216,6 +216,30 @@ impl MerkleTree {
     }
 }
 
+impl crate::types::CanonicalBytes for SignedResult {
+    const SIGNING_DOMAIN: &'static [u8] = b"mead/result/v1";
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(self.query_id.as_bytes());
+        bytes.extend_from_slice(self.merkle_root.as_bytes());
+        bytes.extend_from_slice(&(self.matches.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&self.timestamp.to_le_bytes());
+        bytes.extend_from_slice(self.sender.as_slice());
+        bytes
+    }
+}
+
+impl crate::types::Signed for SignedResult {
+    fn sender(&self) -> Address {
+        self.sender
+    }
+
+    fn signature(&self) -> &[u8] {
+        &self.signature
+    }
+}
+
 impl SignedResult {
     /// Creates a new `SignedResult` with a Merkle tree committed to all matches.
     ///
@@ -274,17 +298,6 @@ impl SignedResult {
             self.timestamp,
             self.sender,
         )
-    }
-
-    /// Verifies this result's signature using a caller-provided signature scheme.
-    ///
-    /// The verifier receives the canonical signing payload and the signature.
-    /// This keeps the data structure independent of the chosen crypto backend.
-    pub fn verify_signature_with<F>(&self, verify: F) -> bool
-    where
-        F: FnOnce(&[u8], &[u8]) -> bool,
-    {
-        verify(&self.signing_payload(), &self.signature)
     }
 
     /// Validates the result independently of its query.

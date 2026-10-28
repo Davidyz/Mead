@@ -1,18 +1,22 @@
-//! Host-backed signature verification and caller authorization.
+﻿//! Host-backed signature verification and caller authorization.
 //!
-//! The crypto backend lives here rather than in [`crate::types`] so the on-chain
-//! data structures stay independent of it. The structures expose
-//! [`SignedQuery::verify_signature_with`] precisely so a caller can supply the
-//! scheme, which is what this module does.
-//!
-//! [`SignedQuery::verify_signature_with`]: crate::types::SignedQuery::verify_signature_with
+//! The crypto backend lives here rather than in `types/` so the on-chain
+//! data structures stay independent of it.
 
 use lyquid::prelude::LyquidResult;
 use lyquid::prelude::lyquor_api;
 use lyquid::prelude::lyquor_primitives::{Address, Bytes, Cipher};
 
 use crate::types::invalid_input;
-use crate::types::{SignedQuery, SignedResult};
+use crate::types::{CanonicalBytes, Signed, SignedQuery, SignedResult};
+
+/// Verifies any signed item implementing [`Signed`] + [`CanonicalBytes`].
+///
+/// Single verification entry point: looks up the sender's Ed25519 public key
+/// and verifies the signature over the canonical signing payload.
+pub fn verify_signed<T: Signed>(item: &T) -> bool {
+    verify_ed25519(item.signing_payload().as_slice(), item.signature(), item.sender())
+}
 
 /// Returns the Ed25519 public key bound to `signer`, if that node is registered.
 fn verifying_key(signer: Address) -> Option<[u8; 32]> {
@@ -38,20 +42,6 @@ pub fn verify_ed25519(payload: &[u8], signature: &[u8], signer: Address) -> bool
         Bytes::copy_from_slice(&public_key),
     )
     .unwrap_or(false)
-}
-
-/// Verifies a signed query against the sender it declares.
-pub fn verify_query(query: &SignedQuery) -> bool {
-    query.verify_signature_with(|payload, signature| {
-        verify_ed25519(payload, signature, query.sender)
-    })
-}
-
-/// Verifies a signed result against the sender it declares.
-pub fn verify_result(result: &SignedResult) -> bool {
-    result.verify_signature_with(|payload, signature| {
-        verify_ed25519(payload, signature, result.sender)
-    })
 }
 
 /// Enforces who may submit a message on behalf of `sender`.

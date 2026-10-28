@@ -13,27 +13,10 @@ use types::{QueryRegistry, ResultRegistry, SignedQuery, SignedResult};
 
 state! {
     // On-chain registries
-    instance skill_dir: Option<String> = None;
     network query_registry: QueryRegistry = QueryRegistry::default();
     network result_registry: ResultRegistry = ResultRegistry::default();
 }
 
-/// Sets this node's local skill directory.
-///
-/// Previously named `constructor`, but `constructor` must be a network function
-/// per the LDK rules, while `skill_dir` is instance state. The old name collided
-/// with Solidity's reserved `constructor` keyword in the generated stub and
-/// blocked `shaker deploy` (solc ParserError 3323). Renamed to an instance setter
-/// so it no longer collides; the value must now be passed by an explicit call
-/// after deployment.
-#[method::instance(export = eth)]
-fn set_skill_dir(ctx: &mut _, skill_dir: String) -> LyquidResult<()> {
-    {
-        let mut dir = ctx.instance.skill_dir.write();
-        *dir = Some(skill_dir);
-    }
-    Ok(())
-}
 
 // Registers a query and creates its responder set.
 //
@@ -44,7 +27,7 @@ fn set_skill_dir(ctx: &mut _, skill_dir: String) -> LyquidResult<()> {
 fn register_query(ctx: &mut _, query: SignedQuery) -> LyquidResult<()> {
     verify::ensure_authorized(ctx.caller, query.sender)?;
 
-    if !verify::verify_query(&query) {
+    if !verify::verify_signed(&query) {
         return Err(invalid_input("query signature is invalid"));
     }
 
@@ -56,7 +39,7 @@ fn register_query(ctx: &mut _, query: SignedQuery) -> LyquidResult<()> {
 fn submit_result(ctx: &mut _, result: SignedResult) -> LyquidResult<()> {
     verify::ensure_authorized(ctx.caller, result.sender)?;
 
-    if !verify::verify_result(&result) {
+    if !verify::verify_signed(&result) {
         return Err(invalid_input("result signature is invalid"));
     }
 

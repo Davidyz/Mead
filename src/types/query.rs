@@ -1,6 +1,6 @@
-//! On-chain search query data structures.
+﻿//! On-chain search query data structures.
 //!
-//! When a node `X₀` initiates a search, it submits a `SignedQuery` to the chain.
+//! When a node `X鈧€` initiates a search, it submits a `SignedQuery` to the chain.
 //! The query ID is stored on-chain so peers can verify they are responding to the
 //! same search, including its parameters, timestamp, and sender.
 
@@ -145,7 +145,7 @@ pub fn query_signing_payload(
     payload
 }
 
-/// A signed search query submitted on-chain by the querying node `X₀`.
+/// A signed search query submitted on-chain by the querying node `X鈧€`.
 ///
 /// The query ID commits to the query text digest, parameters, timestamp, and
 /// sender. Peers bind their results to this ID.
@@ -167,10 +167,33 @@ pub struct SignedQuery {
     pub params: QueryParams,
     /// UTC timestamp of when the query was created, in seconds since the Unix epoch.
     pub timestamp: u64,
-    /// Address of the querying node `X₀`.
+    /// Address of the querying node `X鈧€`.
     pub sender: Address,
-    /// Signature over [`SignedQuery::signing_payload`] by `X₀`.
+    /// Signature over [`SignedQuery::signing_payload`] by `X鈧€`.
     pub signature: Vec<u8>,
+}
+
+impl crate::types::CanonicalBytes for SignedQuery {
+    const SIGNING_DOMAIN: &'static [u8] = b"mead/query/v1";
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(self.query_digest.as_bytes());
+        bytes.extend_from_slice(&self.params.k.to_le_bytes());
+        bytes.extend_from_slice(&self.timestamp.to_le_bytes());
+        bytes.extend_from_slice(self.sender.as_slice());
+        bytes
+    }
+}
+
+impl crate::types::Signed for SignedQuery {
+    fn sender(&self) -> Address {
+        self.sender
+    }
+
+    fn signature(&self) -> &[u8] {
+        &self.signature
+    }
 }
 
 impl SignedQuery {
@@ -212,17 +235,6 @@ impl SignedQuery {
     /// Returns the canonical bytes covered by this query's signature.
     pub fn signing_payload(&self) -> Vec<u8> {
         query_signing_payload(self.query_digest, &self.params, self.timestamp, self.sender)
-    }
-
-    /// Verifies this query's signature using a caller-provided signature scheme.
-    ///
-    /// The verifier receives the canonical signing payload and the signature.
-    /// This keeps the data structure independent of the chosen crypto backend.
-    pub fn verify_signature_with<F>(&self, verify: F) -> bool
-    where
-        F: FnOnce(&[u8], &[u8]) -> bool,
-    {
-        verify(&self.signing_payload(), &self.signature)
     }
 
     /// Validates the query's fields and its derived query ID.

@@ -1,4 +1,4 @@
-﻿//! Host-backed signature verification and caller authorization.
+//! Host-backed signature verification and caller authorization.
 //!
 //! The crypto backend lives here rather than in `types/` so the on-chain
 //! data structures stay independent of it.
@@ -15,7 +15,11 @@ use crate::types::{CanonicalBytes, Signed, SignedQuery, SignedResult};
 /// Single verification entry point: looks up the sender's Ed25519 public key
 /// and verifies the signature over the canonical signing payload.
 pub fn verify_signed<T: Signed>(item: &T) -> bool {
-    verify_ed25519(item.signing_payload().as_slice(), item.signature(), item.sender())
+    verify_ed25519(
+        item.signing_payload().as_slice(),
+        item.signature(),
+        item.sender(),
+    )
 }
 
 /// Returns the Ed25519 public key bound to `signer`, if that node is registered.

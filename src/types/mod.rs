@@ -1,4 +1,4 @@
-﻿pub mod merkle;
+pub mod merkle;
 pub mod query;
 pub mod results;
 
@@ -45,7 +45,6 @@ pub trait Signed: CanonicalBytes {
 
     /// The raw signature bytes.
     fn signature(&self) -> &[u8];
-
 }
 
 pub(crate) fn invalid_input(message: impl Into<String>) -> LyquidError {

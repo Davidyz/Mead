@@ -1,4 +1,4 @@
-﻿//! Mead: blockchain-based P2P skill distribution platform.
+//! Mead: blockchain-based P2P skill distribution platform.
 //!
 //! On-chain state consists of a skill directory and query/result registries
 //! that track search queries and peer-submitted results.
@@ -16,7 +16,6 @@ state! {
     network query_registry: QueryRegistry = QueryRegistry::default();
     network result_registry: ResultRegistry = ResultRegistry::default();
 }
-
 
 // Registers a query and creates its responder set.
 //

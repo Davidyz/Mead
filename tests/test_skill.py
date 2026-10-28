@@ -404,3 +404,64 @@ def test_manager_deduplicates_canonically_equal_skills() -> None:
     manager.add_skill(reordered)
 
     assert list(manager._skills.values()) == [first]
+
+
+def test_get_skill_exposes_description_or_selected_resources() -> None:
+    skill = Skill.from_manifest(
+        {
+            "id": "custom-id",
+            "name": "demo",
+            "description": "A demo skill",
+            "triggers": ["demo"],
+        },
+        "Use this skill.",
+        [
+            {"path": "a.txt", "contents": "A"},
+            {"path": "nested/b.txt", "contents": "B"},
+        ],
+    )
+    manager = SkillManager()
+    manager.add_skill(skill)
+
+    assert manager.get_skill("custom-id", "description") == "A demo skill"
+
+    full = manager.get_skill("demo", "full", ["nested/b.txt"])
+    assert "# demo" in full
+    assert "Use this skill." in full
+    assert "## Resource: nested/b.txt\n\nB" in full
+    assert "## Resource: a.txt" not in full
+    assert "- a.txt" in full
+
+
+def test_get_skill_rejects_unknown_skills_and_resources() -> None:
+    skill = Skill.from_manifest(
+        {"name": "demo", "description": "A demo skill"},
+        "Body",
+        [{"path": "a.txt", "contents": "A"}],
+    )
+    manager = SkillManager()
+    manager.add_skill(skill)
+
+    with pytest.raises(ValueError, match="Could not find a skill named missing"):
+        manager.get_skill("missing", "full")
+    with pytest.raises(ValueError, match="does not contain resources: missing.txt"):
+        manager.get_skill("demo", "full", ["missing.txt"])
+
+
+def test_list_skill_returns_names_and_descriptions_in_order() -> None:
+    manager = SkillManager()
+    manager.add_skill(
+        Skill.from_manifest(
+            {"name": "zeta", "description": "The last skill"}, "Zeta body"
+        )
+    )
+    manager.add_skill(
+        Skill.from_manifest(
+            {"name": "alpha", "description": "The first skill"}, "Alpha body"
+        )
+    )
+
+    assert manager.list_skill() == [
+        {"name": "alpha", "description": "The first skill"},
+        {"name": "zeta", "description": "The last skill"},
+    ]

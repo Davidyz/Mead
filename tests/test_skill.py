@@ -289,15 +289,75 @@ def test_requires_skill_md(tmp_path: Path) -> None:
         Skill(skill_dir)
 
 
+def test_canonical_key_ignores_unordered_collections() -> None:
+    def build(
+        triggers: list[str],
+        capabilities: list[str],
+        metadata: dict[str, str],
+        extra: dict[str, object],
+        resources: list[dict[str, str]],
+    ) -> Skill:
+        return Skill.from_manifest(
+            {
+                "id": "demo",
+                "name": "demo",
+                "description": "A demo",
+                "triggers": triggers,
+                "capabilities": capabilities,
+                "metadata": metadata,
+                "extra": extra,
+            },
+            "Body",
+            resources,
+        )
+
+    first = build(
+        ["beta", "alpha"],
+        ["writing", "testing"],
+        {"z": "last", "a": "first"},
+        {"nested": {"z": 2, "a": 1}},
+        [
+            {"path": "b.txt", "contents": "B"},
+            {"path": "a.txt", "contents": "A"},
+        ],
+    )
+    reordered = build(
+        ["alpha", "beta"],
+        ["testing", "writing"],
+        {"a": "first", "z": "last"},
+        {"nested": {"a": 1, "z": 2}},
+        [
+            {"path": "a.txt", "contents": "A"},
+            {"path": "b.txt", "contents": "B"},
+        ],
+    )
+
+    assert first.canonical_key() == reordered.canonical_key()
+
+
+def test_canonical_key_preserves_list_multiplicity() -> None:
+    first = Skill.from_manifest(
+        {"name": "demo", "description": "A demo", "triggers": ["alpha"]}, "Body"
+    )
+    repeated = Skill.from_manifest(
+        {"name": "demo", "description": "A demo", "triggers": ["alpha", "alpha"]},
+        "Body",
+    )
+
+    assert first.canonical_key() != repeated.canonical_key()
+
+
 def test_manager_loads_fixture_catalog(fixture_skills_dir: Path) -> None:
     manager = SkillManager(fixture_skills_dir.parent)
     manager.load_skills()
 
     assert manager._skills
     assert all(isinstance(skill, Skill) for skill in manager._skills.values())
-    assert set(manager._skills) == {skill.id for skill in manager._skills.values()}
-    assert "doc-coauthoring" in manager._skills
-    assert "internal-comms" in manager._skills
+    assert set(manager._skills) == {
+        skill.canonical_key() for skill in manager._skills.values()
+    }
+    assert "doc-coauthoring" in {skill.id for skill in manager._skills.values()}
+    assert "internal-comms" in {skill.id for skill in manager._skills.values()}
 
 
 def test_manager_skips_skills_with_non_text_resources(tmp_path: Path) -> None:
@@ -309,7 +369,7 @@ def test_manager_skips_skills_with_non_text_resources(tmp_path: Path) -> None:
     manager = SkillManager(tmp_path)
     manager.load_skills()
 
-    assert set(manager._skills) == {"demo"}
+    assert [skill.id for skill in manager._skills.values()] == ["demo"]
 
 
 def test_manager_holds_in_memory_skills_without_a_directory() -> None:
@@ -318,4 +378,29 @@ def test_manager_holds_in_memory_skills_without_a_directory() -> None:
 
     manager.add_skill(skill)
 
-    assert manager._skills == {"demo": skill}
+    assert manager._skills == {skill.canonical_key(): skill}
+
+
+def test_manager_deduplicates_canonically_equal_skills() -> None:
+    first = Skill.from_manifest(
+        {
+            "name": "demo",
+            "description": "A demo",
+            "triggers": ["beta", "alpha"],
+        },
+        "Body",
+    )
+    reordered = Skill.from_manifest(
+        {
+            "name": "demo",
+            "description": "A demo",
+            "triggers": ["alpha", "beta"],
+        },
+        "Body",
+    )
+    manager = SkillManager()
+
+    manager.add_skill(first)
+    manager.add_skill(reordered)
+
+    assert list(manager._skills.values()) == [first]

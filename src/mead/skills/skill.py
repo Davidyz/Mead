@@ -1,5 +1,6 @@
+import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
@@ -149,7 +150,7 @@ class Skill:
                 f"{skill_dir} does not contain a SKILL.md file. It's probably not a skill."
             )
 
-        self._dir = skill_dir
+        self._dir: Path | None = skill_dir
         self.parse_frontmatter()
         self.resources = self._get_resources()
 
@@ -189,7 +190,7 @@ class Skill:
         cls,
         frontmatter: Frontmatter | Mapping[str, Any],
         instructions: str,
-        resources: list[SkillResource | Mapping[str, str]] | None = None,
+        resources: Iterable[SkillResource | Mapping[str, str]] | None = None,
     ) -> Self:
         """Build a skill from already-parsed frontmatter and instructions."""
 
@@ -207,8 +208,13 @@ class Skill:
 
         return cls._from_parts(parsed, instructions, parsed_resources)
 
+    def _require_dir(self) -> Path:
+        if self._dir is None:
+            raise ValueError("skill was not loaded from a directory")
+        return self._dir
+
     def parse_frontmatter(self) -> Frontmatter:
-        source = (self._dir / "SKILL.md").read_text(encoding="utf-8")
+        source = (self._require_dir() / "SKILL.md").read_text(encoding="utf-8")
         frontmatter, body = _parse_frontmatter(source)
 
         self._frontmatter = frontmatter
@@ -227,10 +233,11 @@ class Skill:
         return frontmatter
 
     def _get_resources(self) -> list[SkillResource]:
+        skill_dir = self._require_dir()
         resources: list[SkillResource] = []
 
-        for path in self._dir.rglob("*"):
-            relative = path.relative_to(self._dir)
+        for path in skill_dir.rglob("*"):
+            relative = path.relative_to(skill_dir)
             if any(part.startswith(".") for part in relative.parts):
                 continue
             if not path.is_file() or path.name.lower() == "skill.md":
@@ -268,6 +275,39 @@ class Skill:
             "extra": dict(self.extra),
             "resources": [resource.to_dict() for resource in self.resources],
         }
+
+    def canonical_dict(self) -> dict[str, Any]:
+        """Return a deterministic representation used for internal deduplication."""
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "triggers": sorted(self.triggers),
+            "instructions": self.instructions,
+            "capabilities": sorted(self.capabilities),
+            "metadata": dict(self.metadata),
+            "extra": dict(self.extra),
+            "resources": [
+                resource.to_dict()
+                for resource in sorted(self.resources, key=lambda item: item.path)
+            ],
+        }
+
+    def canonical_key(self) -> str:
+        """Return a stable content key for duplicate detection.
+
+        Unlike the JSON transport representation, this ignores the ordering of
+        triggers, capabilities, resources, and object keys.
+        """
+
+        encoded = json.dumps(
+            self.canonical_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def to_json(self) -> str:
         """Encode the skill using the shared Rust/Python JSON schema."""

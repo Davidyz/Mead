@@ -1,4 +1,4 @@
 from .manager import SkillManager
-from .skill import Skill
+from .skill import Frontmatter, Skill, SkillResource
 
-__all__ = ["Skill", "SkillManager"]
+__all__ = ["Frontmatter", "Skill", "SkillManager", "SkillResource"]

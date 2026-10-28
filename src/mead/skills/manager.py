@@ -12,8 +12,8 @@ class SkillManager:
         self._skills: dict[str, Skill] = {}
 
     def add_skill(self, skill: Skill) -> None:
-        """Register a skill regardless of where it was loaded from."""
-        self._skills[skill.id] = skill
+        """Register a skill, ignoring duplicate content."""
+        self._skills.setdefault(skill.canonical_key(), skill)
 
     def load_skills(self) -> None:
         if self._skills_dir is None:

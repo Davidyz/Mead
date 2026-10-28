@@ -295,17 +295,27 @@ def test_manager_loads_fixture_catalog(fixture_skills_dir: Path) -> None:
 
     assert manager._skills
     assert all(isinstance(skill, Skill) for skill in manager._skills.values())
-    assert "doc-coauthoring" in {skill.name for skill in manager._skills.values()}
-    assert "internal-comms" in {skill.name for skill in manager._skills.values()}
+    assert set(manager._skills) == {skill.id for skill in manager._skills.values()}
+    assert "doc-coauthoring" in manager._skills
+    assert "internal-comms" in manager._skills
 
 
 def test_manager_skips_skills_with_non_text_resources(tmp_path: Path) -> None:
     source = "---\nname: demo\ndescription: A demo\n---\nBody"
-    valid_dir = write_skill(tmp_path / "valid", source)
+    write_skill(tmp_path / "valid", source)
     invalid_dir = write_skill(tmp_path / "invalid", source)
     (invalid_dir / "asset.bin").write_bytes(b"\xff\xfe")
 
     manager = SkillManager(tmp_path)
     manager.load_skills()
 
-    assert set(manager._skills) == {valid_dir}
+    assert set(manager._skills) == {"demo"}
+
+
+def test_manager_holds_in_memory_skills_without_a_directory() -> None:
+    skill = Skill.from_manifest({"name": "demo", "description": "A demo"}, "Body")
+    manager = SkillManager()
+
+    manager.add_skill(skill)
+
+    assert manager._skills == {"demo": skill}

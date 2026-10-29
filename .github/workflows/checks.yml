@@ -30,5 +30,8 @@ jobs:
       - name: Start lyquor network
         run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
 
+      - name: Pull skills and build the fixture
+        run: make prepare
+
       - name: Run shaker tests
         run: shaker test Cargo.toml

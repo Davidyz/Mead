@@ -119,12 +119,12 @@ impl SkillMatch {
     }
 }
 
-/// A signed search result submitted on-chain by a peer node `Xᵢ`
+/// A search result submitted on-chain by a peer node `Xᵢ`.
 ///
 /// The result contains a list of matched skills with BM25 scores, a Merkle
-/// tree root for efficient verification, and a signature by the submitting
-/// peer node. The `query_id` field binds this result to its originating
-/// `SearchQuery`.
+/// tree root for efficient verification, and an optional signature by the
+/// submitting peer node. The `query_id` field binds this result to its
+/// originating `SearchQuery`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
     /// Canonical ID of the originating query.
@@ -146,8 +146,8 @@ pub struct SearchResult {
     pub timestamp: u64,
     /// Address of the submitting peer node `Xᵢ`
     pub sender: Address,
-    /// Signature over [`SearchResult::signing_payload`] by `Xᵢ`
-    pub signature: Vec<u8>,
+    /// Signature over [`crate::types::CanonicalBytes::signing_payload`] by `Xᵢ`, if present.
+    signature: Option<Vec<u8>>,
 }
 
 /// Returns the canonical bytes that a result submitter signs.
@@ -235,23 +235,21 @@ impl crate::types::Signed for SearchResult {
         self.sender
     }
 
-    fn signature(&self) -> &[u8] {
-        &self.signature
+    fn signature(&self) -> Option<&[u8]> {
+        self.signature.as_deref()
     }
 }
 
 impl SearchResult {
     /// Creates a new `SearchResult` with a Merkle tree committed to all matches.
     ///
-    /// Matches are sorted into canonical order. `timestamp` must be supplied
-    /// before signing; `signature` must cover [`SearchResult::signing_payload`]
-    /// for the resulting fields.
+    /// Matches are sorted into canonical order. The returned result is unsigned;
+    /// attach a signature with [`SearchResult::set_signature`].
     pub fn new(
         query_id: Hash,
         mut matches: Vec<SkillMatch>,
         timestamp: u64,
         sender: Address,
-        signature: Vec<u8>,
     ) -> LyquidResult<Self> {
         canonicalize_matches(&mut matches)?;
 
@@ -262,10 +260,15 @@ impl SearchResult {
             merkle_root: tree.root(),
             timestamp,
             sender,
-            signature,
+            signature: None,
         };
         result.validate()?;
         Ok(result)
+    }
+
+    /// Attaches the signature over [`crate::types::CanonicalBytes::signing_payload`].
+    pub fn set_signature(&mut self, signature: Vec<u8>) {
+        self.signature = Some(signature);
     }
 
     /// Computes the signing payload for a result before it is constructed.
@@ -293,9 +296,6 @@ impl SearchResult {
     pub fn validate(&self) -> LyquidResult<()> {
         if self.timestamp == 0 {
             return Err(invalid_input("result timestamp must be non-zero"));
-        }
-        if self.signature.is_empty() {
-            return Err(invalid_input("result signature must not be empty"));
         }
         if self.matches.len() > MAX_MATCHES {
             return Err(invalid_input("result contains too many matches"));
@@ -352,14 +352,13 @@ mod tests {
     }
 
     fn query_with_k(k: u64) -> SearchQuery {
-        SearchQuery::new(b"query", QueryParams { k }, 1, Address::ZERO, vec![1]).unwrap()
+        SearchQuery::new(b"query", QueryParams { k }, 1, Address::ZERO).unwrap()
     }
 
     #[lyquid_test::test]
     fn accepts_empty_match_set() {
         let query = query_with_k(10);
-        let result =
-            SearchResult::new(query.query_id, Vec::new(), 1, Address::ZERO, vec![1]).unwrap();
+        let result = SearchResult::new(query.query_id, Vec::new(), 1, Address::ZERO).unwrap();
 
         assert!(result.matches.is_empty());
         assert!(result.validate_against(&query).is_ok());
@@ -373,7 +372,6 @@ mod tests {
             vec![skill(1, 1), skill(2, 0)],
             1,
             Address::ZERO,
-            vec![1],
         )
         .unwrap();
 
@@ -389,7 +387,6 @@ mod tests {
             vec![skill(1, 1), skill(1, 0)],
             1,
             Address::ZERO,
-            vec![1],
         );
 
         assert!(result.is_err());
@@ -398,13 +395,7 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_negative_scores() {
         let query = query_with_k(10);
-        let result = SearchResult::new(
-            query.query_id,
-            vec![skill(1, -1)],
-            1,
-            Address::ZERO,
-            vec![1],
-        );
+        let result = SearchResult::new(query.query_id, vec![skill(1, -1)], 1, Address::ZERO);
 
         assert!(result.is_err());
     }
@@ -413,8 +404,7 @@ mod tests {
     fn accepts_zero_score() {
         let query = query_with_k(10);
         let result =
-            SearchResult::new(query.query_id, vec![skill(1, 0)], 1, Address::ZERO, vec![1])
-                .unwrap();
+            SearchResult::new(query.query_id, vec![skill(1, 0)], 1, Address::ZERO).unwrap();
 
         assert!(result.validate_against(&query).is_ok());
     }

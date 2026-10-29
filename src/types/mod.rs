@@ -43,8 +43,8 @@ pub trait Signed: CanonicalBytes {
     /// The address of the entity that signed this message.
     fn sender(&self) -> Address;
 
-    /// The raw signature bytes.
-    fn signature(&self) -> &[u8];
+    /// The raw signature bytes, if the item has been signed.
+    fn signature(&self) -> Option<&[u8]>;
 }
 
 pub(crate) fn invalid_input(message: impl Into<String>) -> LyquidError {

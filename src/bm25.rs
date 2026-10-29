@@ -7,6 +7,8 @@
 //! Keeping the evaluation order fixed makes the scores reproducible across
 //! peers and platforms.
 
+// TODO: use khive_bm25::Bm25Index once its Instant-based metrics can be disabled (or vendor the tokenizer and score types) so this scorer cannot drift from upstream.
+
 use khive_bm25::{DeterministicScore, tokenize};
 use lyquid::prelude::{Hash, HashMap, new_hashmap, new_hashset};
 

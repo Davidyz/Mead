@@ -16,4 +16,6 @@ jobs:
         uses: actions-rust-lang/rustfmt@v1
 
       - name: Run shaker tests
-        run: shaker test Cargo.toml
+        run: |
+          make prepare
+          shaker test Cargo.toml

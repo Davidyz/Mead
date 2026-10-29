@@ -9,7 +9,7 @@ pub mod types;
 pub mod verify;
 
 use types::invalid_input;
-use types::{QueryRegistry, ResultRegistry, SignedQuery, SignedResult};
+use types::{QueryRegistry, ResultRegistry, SearchQuery, SearchResult};
 
 state! {
     // On-chain registries
@@ -23,7 +23,7 @@ state! {
 // behalf of the declared sender, otherwise any node could post a query under a
 // forged address and have it accepted.
 #[method::network]
-fn register_query(ctx: &mut _, query: SignedQuery) -> LyquidResult<()> {
+fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
     verify::ensure_authorized(ctx.caller, query.sender)?;
 
     if !verify::verify_signed(&query) {
@@ -35,7 +35,7 @@ fn register_query(ctx: &mut _, query: SignedQuery) -> LyquidResult<()> {
 
 // Validates and stores a peer result, then records the peer as a responder.
 #[method::network]
-fn submit_result(ctx: &mut _, result: SignedResult) -> LyquidResult<()> {
+fn submit_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
     verify::ensure_authorized(ctx.caller, result.sender)?;
 
     if !verify::verify_signed(&result) {
@@ -62,14 +62,14 @@ fn submit_result(ctx: &mut _, result: SignedResult) -> LyquidResult<()> {
 
 // Returns a registered query by its canonical ID.
 #[method::network]
-fn get_query(ctx: &_, query_id: HashBytes) -> LyquidResult<Option<SignedQuery>> {
+fn get_query(ctx: &_, query_id: HashBytes) -> LyquidResult<Option<SearchQuery>> {
     let query_id = Hash::from(query_id);
     Ok(ctx.network.query_registry.get(&query_id).cloned())
 }
 
 // Returns a peer's result for a query.
 #[method::network]
-fn get_result(ctx: &_, query_id: HashBytes, sender: Address) -> LyquidResult<Option<SignedResult>> {
+fn get_result(ctx: &_, query_id: HashBytes, sender: Address) -> LyquidResult<Option<SearchResult>> {
     let query_id = Hash::from(query_id);
     Ok(ctx.network.result_registry.get(&query_id, sender).cloned())
 }

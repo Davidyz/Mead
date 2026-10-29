@@ -1,7 +1,7 @@
 //! On-chain search result data structures.
 //!
-//! When a peer node `Xᵢ`
-//! submits a `SignedResult` to the chain. The result includes a Merkle tree root
+//! When a peer node `Xᵢ` receives a search request, it runs a local search and
+//! submits a `SearchResult` to the chain. The result includes a Merkle tree root
 //! over the matched skills for efficient verification.
 
 use core::cmp::Ordering;
@@ -10,7 +10,7 @@ use lyquid::prelude::*;
 
 use crate::types::invalid_input;
 use crate::types::merkle::{Hash, MerkleTree, deserialize_hash, serialize_hash};
-use crate::types::query::{MAX_RESULTS_PER_PEER, SignedQuery};
+use crate::types::query::{MAX_RESULTS_PER_PEER, SearchQuery};
 
 const RESULT_SIGNING_DOMAIN: &[u8] = b"mead/result/v1";
 const MATCH_LEAF_DOMAIN: &[u8] = b"mead/skill-match/v1";
@@ -26,11 +26,11 @@ pub type Bm25Score = i64;
 
 /// Registry that stores all submitted search results.
 ///
-/// Maps `(query_id, submitter_address)` to the full `SignedResult`, ensuring
+/// Maps `(query_id, submitter_address)` to the full `SearchResult`, ensuring
 /// each peer can only submit one result per query.
 #[derive(Debug, Clone)]
 pub struct ResultRegistry {
-    results: HashMap<(Hash, Address), SignedResult>,
+    results: HashMap<(Hash, Address), SearchResult>,
 }
 
 impl Default for ResultRegistry {
@@ -45,7 +45,7 @@ impl ResultRegistry {
     /// Inserts a result after validating it against its query.
     ///
     /// Returns an error if the peer already submitted a result for this query.
-    pub fn insert(&mut self, query: &SignedQuery, result: SignedResult) -> LyquidResult<()> {
+    pub fn insert(&mut self, query: &SearchQuery, result: SearchResult) -> LyquidResult<()> {
         result.validate_against(query)?;
 
         let key = (result.query_id, result.sender);
@@ -60,7 +60,7 @@ impl ResultRegistry {
     }
 
     /// Returns a result for the given query and peer.
-    pub fn get(&self, query_id: &Hash, sender: Address) -> Option<&SignedResult> {
+    pub fn get(&self, query_id: &Hash, sender: Address) -> Option<&SearchResult> {
         self.results.get(&(*query_id, sender))
     }
 
@@ -124,9 +124,9 @@ impl SkillMatch {
 /// The result contains a list of matched skills with BM25 scores, a Merkle
 /// tree root for efficient verification, and a signature by the submitting
 /// peer node. The `query_id` field binds this result to its originating
-/// `SignedQuery`.
+/// `SearchQuery`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SignedResult {
+pub struct SearchResult {
     /// Canonical ID of the originating query.
     #[serde(
         serialize_with = "serialize_hash",
@@ -146,7 +146,7 @@ pub struct SignedResult {
     pub timestamp: u64,
     /// Address of the submitting peer node `Xᵢ`
     pub sender: Address,
-    /// Signature over [`SignedResult::signing_payload`] by `Xᵢ`
+    /// Signature over [`SearchResult::signing_payload`] by `Xᵢ`
     pub signature: Vec<u8>,
 }
 
@@ -216,7 +216,7 @@ impl MerkleTree {
     }
 }
 
-impl crate::types::CanonicalBytes for SignedResult {
+impl crate::types::CanonicalBytes for SearchResult {
     const SIGNING_DOMAIN: &'static [u8] = b"mead/result/v1";
 
     fn canonical_bytes(&self) -> Vec<u8> {
@@ -230,7 +230,7 @@ impl crate::types::CanonicalBytes for SignedResult {
     }
 }
 
-impl crate::types::Signed for SignedResult {
+impl crate::types::Signed for SearchResult {
     fn sender(&self) -> Address {
         self.sender
     }
@@ -240,11 +240,11 @@ impl crate::types::Signed for SignedResult {
     }
 }
 
-impl SignedResult {
-    /// Creates a new `SignedResult` with a Merkle tree committed to all matches.
+impl SearchResult {
+    /// Creates a new `SearchResult` with a Merkle tree committed to all matches.
     ///
     /// Matches are sorted into canonical order. `timestamp` must be supplied
-    /// before signing; `signature` must cover [`SignedResult::signing_payload`]
+    /// before signing; `signature` must cover [`SearchResult::signing_payload`]
     /// for the resulting fields.
     pub fn new(
         query_id: Hash,
@@ -271,7 +271,7 @@ impl SignedResult {
     /// Computes the signing payload for a result before it is constructed.
     ///
     /// This canonicalizes `matches` in place, so the caller can sign the payload
-    /// and then pass the same ordering to [`SignedResult::new`].
+    /// and then pass the same ordering to [`SearchResult::new`].
     pub fn signing_payload_for(
         query_id: Hash,
         matches: &mut [SkillMatch],
@@ -324,7 +324,7 @@ impl SignedResult {
     }
 
     /// Validates this result against its originating query.
-    pub fn validate_against(&self, query: &SignedQuery) -> LyquidResult<()> {
+    pub fn validate_against(&self, query: &SearchQuery) -> LyquidResult<()> {
         query.validate()?;
         self.validate()?;
 
@@ -351,15 +351,15 @@ mod tests {
         }
     }
 
-    fn query_with_k(k: u64) -> SignedQuery {
-        SignedQuery::new(b"query", QueryParams { k }, 1, Address::ZERO, vec![1]).unwrap()
+    fn query_with_k(k: u64) -> SearchQuery {
+        SearchQuery::new(b"query", QueryParams { k }, 1, Address::ZERO, vec![1]).unwrap()
     }
 
     #[lyquid_test::test]
     fn accepts_empty_match_set() {
         let query = query_with_k(10);
         let result =
-            SignedResult::new(query.query_id, Vec::new(), 1, Address::ZERO, vec![1]).unwrap();
+            SearchResult::new(query.query_id, Vec::new(), 1, Address::ZERO, vec![1]).unwrap();
 
         assert!(result.matches.is_empty());
         assert!(result.validate_against(&query).is_ok());
@@ -368,7 +368,7 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_too_many_matches_for_query() {
         let query = query_with_k(1);
-        let result = SignedResult::new(
+        let result = SearchResult::new(
             query.query_id,
             vec![skill(1, 1), skill(2, 0)],
             1,
@@ -384,7 +384,7 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_duplicate_skill_digests() {
         let query = query_with_k(10);
-        let result = SignedResult::new(
+        let result = SearchResult::new(
             query.query_id,
             vec![skill(1, 1), skill(1, 0)],
             1,
@@ -398,7 +398,7 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_negative_scores() {
         let query = query_with_k(10);
-        let result = SignedResult::new(
+        let result = SearchResult::new(
             query.query_id,
             vec![skill(1, -1)],
             1,
@@ -413,7 +413,7 @@ mod tests {
     fn accepts_zero_score() {
         let query = query_with_k(10);
         let result =
-            SignedResult::new(query.query_id, vec![skill(1, 0)], 1, Address::ZERO, vec![1])
+            SearchResult::new(query.query_id, vec![skill(1, 0)], 1, Address::ZERO, vec![1])
                 .unwrap();
 
         assert!(result.validate_against(&query).is_ok());

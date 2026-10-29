@@ -16,6 +16,12 @@ use skill::{Skill, SkillError, SkillManager};
 use types::invalid_input;
 use types::{QueryRegistry, ResultRegistry, SearchQuery, SearchResult};
 
+mod bm25;
+pub mod skill;
+pub mod types;
+
+pub use bm25::search;
+
 state! {
     // On-chain registries
     network query_registry: QueryRegistry = QueryRegistry::default();

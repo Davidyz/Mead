@@ -5,6 +5,7 @@
 
 use lyquid::prelude::lyquor_primitives::HashBytes;
 use lyquid::prelude::*;
+pub mod skill;
 pub mod types;
 pub mod verify;
 

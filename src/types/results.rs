@@ -12,7 +12,6 @@ use crate::types::invalid_input;
 use crate::types::merkle::{Hash, MerkleTree, deserialize_hash, serialize_hash};
 use crate::types::query::{MAX_RESULTS_PER_PEER, SearchQuery};
 
-const RESULT_SIGNING_DOMAIN: &[u8] = b"mead/result/v1";
 const MATCH_LEAF_DOMAIN: &[u8] = b"mead/skill-match/v1";
 
 /// Maximum number of matches accepted in a single result.
@@ -150,24 +149,6 @@ pub struct SearchResult {
     signature: Option<Vec<u8>>,
 }
 
-/// Returns the canonical bytes that a result submitter signs.
-pub fn result_signing_payload(
-    query_id: Hash,
-    merkle_root: Hash,
-    match_count: usize,
-    timestamp: u64,
-    sender: Address,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(RESULT_SIGNING_DOMAIN);
-    payload.extend_from_slice(query_id.as_bytes());
-    payload.extend_from_slice(merkle_root.as_bytes());
-    payload.extend_from_slice(&(match_count as u64).to_le_bytes());
-    payload.extend_from_slice(&timestamp.to_le_bytes());
-    payload.extend_from_slice(sender.as_slice());
-    payload
-}
-
 fn canonicalize_matches(matches: &mut [SkillMatch]) -> LyquidResult<()> {
     if matches.len() > MAX_MATCHES {
         return Err(invalid_input("result contains too many matches"));
@@ -269,27 +250,6 @@ impl SearchResult {
     /// Attaches the signature over [`crate::types::CanonicalBytes::signing_payload`].
     pub fn set_signature(&mut self, signature: Vec<u8>) {
         self.signature = Some(signature);
-    }
-
-    /// Computes the signing payload for a result before it is constructed.
-    ///
-    /// This canonicalizes `matches` in place, so the caller can sign the payload
-    /// and then pass the same ordering to [`SearchResult::new`].
-    pub fn signing_payload_for(
-        query_id: Hash,
-        matches: &mut [SkillMatch],
-        timestamp: u64,
-        sender: Address,
-    ) -> LyquidResult<Vec<u8>> {
-        canonicalize_matches(matches)?;
-        let tree = MerkleTree::from_matches(matches);
-        Ok(result_signing_payload(
-            query_id,
-            tree.root(),
-            matches.len(),
-            timestamp,
-            sender,
-        ))
     }
 
     /// Validates the result independently of its query.

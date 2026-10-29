@@ -14,7 +14,6 @@ use crate::types::merkle::{deserialize_hash, serialize_hash};
 pub const MAX_RESULTS_PER_PEER: u64 = 1024;
 
 const QUERY_ID_DOMAIN: &[u8] = b"mead/query-id/v1";
-const QUERY_SIGNING_DOMAIN: &[u8] = b"mead/query/v1";
 
 /// Registry that tracks all submitted queries and their responders.
 ///
@@ -127,22 +126,6 @@ pub fn compute_query_id(
     hasher.update(&timestamp.to_le_bytes());
     hasher.update(sender.as_slice());
     hasher.finalize()
-}
-
-/// Returns the canonical bytes that a query sender signs.
-pub fn query_signing_payload(
-    query_digest: Hash,
-    params: &QueryParams,
-    timestamp: u64,
-    sender: Address,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(QUERY_SIGNING_DOMAIN);
-    payload.extend_from_slice(query_digest.as_bytes());
-    payload.extend_from_slice(&params.k.to_le_bytes());
-    payload.extend_from_slice(&timestamp.to_le_bytes());
-    payload.extend_from_slice(sender.as_slice());
-    payload
 }
 
 /// A search query submitted on-chain by the querying node `X₀`.

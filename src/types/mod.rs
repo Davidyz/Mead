@@ -4,12 +4,9 @@ pub mod results;
 
 pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection};
 pub use query::{
-    MAX_RESULTS_PER_PEER, QueryParams, QueryRegistry, ResultsPerPeer, SearchQuery,
-    compute_query_id, query_signing_payload,
+    MAX_RESULTS_PER_PEER, QueryParams, QueryRegistry, ResultsPerPeer, SearchQuery, compute_query_id,
 };
-pub use results::{
-    Bm25Score, MAX_MATCHES, ResultRegistry, SearchResult, SkillMatch, result_signing_payload,
-};
+pub use results::{Bm25Score, MAX_MATCHES, ResultRegistry, SearchResult, SkillMatch};
 
 use lyquid::prelude::{Address, LyquidError};
 

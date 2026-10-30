@@ -3,6 +3,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Literal
 
+lazy from mcp.server import MCPServer
+
 from .skill import Skill
 
 
@@ -85,3 +87,9 @@ class SkillManager:
         for path in selected:
             sections.append(f"## Resource: {path}\n\n{resources[path].contents}")
         return "\n\n".join(sections)
+
+    def make_mcp_server(self) -> MCPServer:
+        mcp_server = MCPServer("mead")
+        mcp_server.add_tool(self.list_skill)
+        mcp_server.add_tool(self.get_skill)
+        return mcp_server

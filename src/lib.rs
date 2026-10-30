@@ -12,6 +12,10 @@ pub mod verify;
 use types::invalid_input;
 use types::{QueryRegistry, ResultRegistry, SearchQuery, SearchResult};
 
+mod bm25;
+
+pub use bm25::search;
+
 state! {
     // On-chain registries
     network query_registry: QueryRegistry = QueryRegistry::default();

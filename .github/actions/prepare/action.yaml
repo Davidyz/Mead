@@ -9,10 +9,10 @@ runs:
       with:
         components: rustfmt
 
-    # - uses: astral-sh/setup-uv@v6
+    - uses: astral-sh/setup-uv@v6
 
-    # - run: uv sync --group dev
-    #   shell: bash
+    - run: uv sync --group dev
+      shell: bash
 
     - name: Install LDK
       run: |

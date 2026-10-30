@@ -13,7 +13,7 @@ use khive_bm25::{DeterministicScore, tokenize};
 use lyquid::prelude::{Hash, HashMap, new_hashmap, new_hashset};
 
 use crate::skill::Skill;
-use crate::types::SkillMatch;
+use crate::types::{MAX_MATCHES, SkillMatch};
 
 /// Term saturation parameter.
 const K1: f64 = 1.2;
@@ -59,8 +59,11 @@ impl IndexedSkill {
 ///
 /// Skills are deduplicated by digest, and skills whose canonical encoding is
 /// invalid (or that tokenize to nothing) are skipped. Results are ordered by
-/// descending canonical score, with ties broken by ascending skill digest.
+/// descending canonical score, with ties broken by ascending skill digest,
+/// and are capped at [`MAX_MATCHES`] so the output can always be submitted as
+/// a valid on-chain result.
 pub fn search(query: &str, top_k: usize, skills: &[Skill]) -> Vec<SkillMatch> {
+    let top_k = top_k.min(MAX_MATCHES);
     if top_k == 0 || skills.is_empty() {
         return Vec::new();
     }
@@ -275,6 +278,25 @@ mod tests {
         let rescored = search(query, subset.len(), &subset);
 
         assert_eq!(rescored, matches);
+    }
+
+    #[lyquid_test::test]
+    fn caps_results_at_max_matches() {
+        let skills: Vec<Skill> = (0..=MAX_MATCHES)
+            .map(|index| {
+                Skill::new(
+                    format!("skill-{index}"),
+                    format!("skill-{index}"),
+                    "needle",
+                    "",
+                    Vec::new(),
+                )
+            })
+            .collect();
+
+        let matches = search("needle", usize::MAX, &skills);
+
+        assert_eq!(matches.len(), MAX_MATCHES);
     }
 
     #[lyquid_test::test]

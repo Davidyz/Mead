@@ -1,6 +1,6 @@
 //! On-chain search query data structures.
 //!
-//! When a node `X₀` initiates a search, it submits a `SignedQuery` to the chain.
+//! When a node `X₀` initiates a search, it submits a `SearchQuery` to the chain.
 //! The query ID is stored on-chain so peers can verify they are responding to the
 //! same search, including its parameters, timestamp, and sender.
 
@@ -14,15 +14,14 @@ use crate::types::merkle::{deserialize_hash, serialize_hash};
 pub const MAX_RESULTS_PER_PEER: u64 = 1024;
 
 const QUERY_ID_DOMAIN: &[u8] = b"mead/query-id/v1";
-const QUERY_SIGNING_DOMAIN: &[u8] = b"mead/query/v1";
 
 /// Registry that tracks all submitted queries and their responders.
 ///
-/// - `queries`: maps query ID to the full SignedQuery
+/// - `queries`: maps query ID to the full SearchQuery
 /// - `responder_index`: maps query ID to the set of addresses that submitted results
 #[derive(Debug, Clone)]
 pub struct QueryRegistry {
-    queries: HashMap<Hash, SignedQuery>,
+    queries: HashMap<Hash, SearchQuery>,
     responder_index: HashMap<Hash, HashSet<Address>>,
 }
 
@@ -37,7 +36,7 @@ impl Default for QueryRegistry {
 
 impl QueryRegistry {
     /// Registers a query, rejecting duplicate query IDs.
-    pub fn insert(&mut self, query: SignedQuery) -> LyquidResult<()> {
+    pub fn insert(&mut self, query: SearchQuery) -> LyquidResult<()> {
         query.validate()?;
 
         if self.queries.contains_key(&query.query_id) {
@@ -51,7 +50,7 @@ impl QueryRegistry {
     }
 
     /// Returns a query by ID.
-    pub fn get(&self, query_id: &Hash) -> Option<&SignedQuery> {
+    pub fn get(&self, query_id: &Hash) -> Option<&SearchQuery> {
         self.queries.get(query_id)
     }
 
@@ -129,28 +128,12 @@ pub fn compute_query_id(
     hasher.finalize()
 }
 
-/// Returns the canonical bytes that a query sender signs.
-pub fn query_signing_payload(
-    query_digest: Hash,
-    params: &QueryParams,
-    timestamp: u64,
-    sender: Address,
-) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(QUERY_SIGNING_DOMAIN);
-    payload.extend_from_slice(query_digest.as_bytes());
-    payload.extend_from_slice(&params.k.to_le_bytes());
-    payload.extend_from_slice(&timestamp.to_le_bytes());
-    payload.extend_from_slice(sender.as_slice());
-    payload
-}
-
-/// A signed search query submitted on-chain by the querying node `X₀`.
+/// A search query submitted on-chain by the querying node `X₀`.
 ///
 /// The query ID commits to the query text digest, parameters, timestamp, and
 /// sender. Peers bind their results to this ID.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SignedQuery {
+pub struct SearchQuery {
     /// Canonical ID of the full query.
     #[serde(
         serialize_with = "serialize_hash",
@@ -169,23 +152,46 @@ pub struct SignedQuery {
     pub timestamp: u64,
     /// Address of the querying node `X₀`.
     pub sender: Address,
-    /// Signature over [`SignedQuery::signing_payload`] by `X₀`.
-    pub signature: Vec<u8>,
+    /// Signature over [`crate::types::CanonicalBytes::signing_payload`] by `X₀`, if present.
+    signature: Option<Vec<u8>>,
 }
 
-impl SignedQuery {
+impl crate::types::CanonicalBytes for SearchQuery {
+    const SIGNING_DOMAIN: &'static [u8] = b"mead/query/v1";
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(self.query_digest.as_bytes());
+        bytes.extend_from_slice(&self.params.k.to_le_bytes());
+        bytes.extend_from_slice(&self.timestamp.to_le_bytes());
+        bytes.extend_from_slice(self.sender.as_slice());
+        bytes
+    }
+}
+
+impl crate::types::Signed for SearchQuery {
+    fn sender(&self) -> Address {
+        self.sender
+    }
+
+    fn signature(&self) -> Option<&[u8]> {
+        self.signature.as_deref()
+    }
+}
+
+impl SearchQuery {
     /// Creates a query from the query text, computing its digest and canonical ID.
     ///
-    /// `signature` must be over [`query_signing_payload`] for the same fields.
+    /// The returned query is unsigned; attach a signature with
+    /// [`SearchQuery::set_signature`].
     pub fn new(
         query: impl AsRef<[u8]>,
         params: QueryParams,
         timestamp: u64,
         sender: Address,
-        signature: Vec<u8>,
     ) -> LyquidResult<Self> {
         let query_digest = blake3::hash(query.as_ref());
-        Self::from_digest(query_digest, params, timestamp, sender, signature)
+        Self::from_digest(query_digest, params, timestamp, sender)
     }
 
     /// Creates a query from an already-computed query-text digest.
@@ -194,7 +200,6 @@ impl SignedQuery {
         params: QueryParams,
         timestamp: u64,
         sender: Address,
-        signature: Vec<u8>,
     ) -> LyquidResult<Self> {
         let query_id = compute_query_id(query_digest, &params, timestamp, sender);
         let query = Self {
@@ -203,26 +208,15 @@ impl SignedQuery {
             params,
             timestamp,
             sender,
-            signature,
+            signature: None,
         };
         query.validate()?;
         Ok(query)
     }
 
-    /// Returns the canonical bytes covered by this query's signature.
-    pub fn signing_payload(&self) -> Vec<u8> {
-        query_signing_payload(self.query_digest, &self.params, self.timestamp, self.sender)
-    }
-
-    /// Verifies this query's signature using a caller-provided signature scheme.
-    ///
-    /// The verifier receives the canonical signing payload and the signature.
-    /// This keeps the data structure independent of the chosen crypto backend.
-    pub fn verify_signature_with<F>(&self, verify: F) -> bool
-    where
-        F: FnOnce(&[u8], &[u8]) -> bool,
-    {
-        verify(&self.signing_payload(), &self.signature)
+    /// Attaches the signature over [`crate::types::CanonicalBytes::signing_payload`].
+    pub fn set_signature(&mut self, signature: Vec<u8>) {
+        self.signature = Some(signature);
     }
 
     /// Validates the query's fields and its derived query ID.
@@ -232,10 +226,6 @@ impl SignedQuery {
         if self.timestamp == 0 {
             return Err(invalid_input("query timestamp must be non-zero"));
         }
-        if self.signature.is_empty() {
-            return Err(invalid_input("query signature must not be empty"));
-        }
-
         let expected_id =
             compute_query_id(self.query_digest, &self.params, self.timestamp, self.sender);
         if self.query_id != expected_id {
@@ -250,15 +240,8 @@ impl SignedQuery {
 mod tests {
     use super::*;
 
-    fn valid_query() -> SignedQuery {
-        SignedQuery::new(
-            b"rust async",
-            QueryParams { k: 10 },
-            1,
-            Address::ZERO,
-            vec![1],
-        )
-        .unwrap()
+    fn valid_query() -> SearchQuery {
+        SearchQuery::new(b"rust async", QueryParams { k: 10 }, 1, Address::ZERO).unwrap()
     }
 
     #[lyquid_test::test]
@@ -278,10 +261,12 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    fn rejects_empty_signature() {
-        assert!(
-            SignedQuery::new(b"query", QueryParams { k: 1 }, 1, Address::ZERO, Vec::new()).is_err()
-        );
+    fn signature_is_attached_after_construction() {
+        let mut query = valid_query();
+        assert!(query.signature.is_none());
+
+        query.set_signature(vec![1]);
+        assert_eq!(query.signature, Some(vec![1]));
     }
 
     #[lyquid_test::test]

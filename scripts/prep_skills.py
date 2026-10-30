@@ -10,7 +10,7 @@ def clone_skills_repo(commit: str | None = None):
     skills_dir = TEST_DIR / "skills"
 
     os.system(
-        f"git clone https://github.com/anthropics/skills.git --depth 1 {skills_dir!s}"
+        f"git clone https://github.com/anthropics/skills.git {skills_dir!s}"
     )
 
     os.chdir(skills_dir)

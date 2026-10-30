@@ -9,23 +9,28 @@ runs:
       with:
         components: rustfmt
 
-    - uses: astral-sh/setup-uv@v6
+    # - uses: astral-sh/setup-uv@v6
 
-    - run: uv sync --group dev
+    # - run: uv sync --group dev
+    #   shell: bash
 
     - name: Install LDK
       run: |
         curl ldk.lyquor.dev -L | bash
         echo "$HOME/.shakenup/bin/" >> $GITHUB_PATH
         cargo fetch
+      shell: bash
 
     - name: Check lyquid crate version matches LDK version
       run: |
         cargo info lyquid
         make check-ldk
+      shell: bash
 
     - name: Start lyquor network
       run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
+      shell: bash
 
     - name: Pull skills and build the fixture
       run: make prepare
+      shell: bash

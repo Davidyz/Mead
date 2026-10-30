@@ -385,7 +385,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(registry.initiator_node(&query_id), Some(initiator));
-        assert_eq!(registry.expected_nodes(&query_id), Some([initiator].as_slice()));
+        assert_eq!(
+            registry.expected_nodes(&query_id),
+            Some([initiator].as_slice())
+        );
         assert!(!registry.is_complete(&query_id));
 
         registry.mark_responder(query_id, peer).unwrap();

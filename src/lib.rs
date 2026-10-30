@@ -149,7 +149,7 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         return Ok(());
     }
 
-    let _accepted: bool = upc!(
+    let _ = upc!(
         (ctx.lyquid_id).search_request[query_id: HashBytes = HashBytes::from(query_id)](query_id: HashBytes = HashBytes::from(query_id)) -> (accepted: bool)
     )?;
 

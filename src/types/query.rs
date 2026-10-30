@@ -19,10 +19,16 @@ const QUERY_ID_DOMAIN: &[u8] = b"mead/query-id/v1";
 ///
 /// - `queries`: maps query ID to the full SearchQuery
 /// - `responder_index`: maps query ID to the set of addresses that submitted results
+/// - `expected_nodes`: maps query ID to the peer nodes that should be notified
+/// - `expected_responders`: maps query ID to the addresses that must respond
+/// - `initiator_index`: maps query ID to the node that started it
 #[derive(Debug, Clone)]
 pub struct QueryRegistry {
     queries: HashMap<Hash, SearchQuery>,
     responder_index: HashMap<Hash, HashSet<Address>>,
+    expected_nodes: HashMap<Hash, Vec<NodeID>>,
+    expected_responders: HashMap<Hash, HashSet<Address>>,
+    initiator_index: HashMap<Hash, NodeID>,
 }
 
 impl Default for QueryRegistry {
@@ -30,6 +36,9 @@ impl Default for QueryRegistry {
         Self {
             queries: new_hashmap(),
             responder_index: new_hashmap(),
+            expected_nodes: new_hashmap(),
+            expected_responders: new_hashmap(),
+            initiator_index: new_hashmap(),
         }
     }
 }
@@ -72,6 +81,58 @@ impl QueryRegistry {
     /// Returns the responder set for a query, if the query exists.
     pub fn responders(&self, query_id: &Hash) -> Option<&HashSet<Address>> {
         self.responder_index.get(query_id)
+    }
+
+    /// Records the peers expected to process this query and the node that started it.
+    ///
+    /// The query must already be registered. `expected_nodes` is the notification
+    /// target list handed to the UPC prepare step, and `expected_responders` is the
+    /// set of addresses that must submit a result before the query is complete.
+    pub fn plan(
+        &mut self,
+        query_id: Hash,
+        initiator: Option<NodeID>,
+        expected_nodes: Vec<NodeID>,
+        expected_responders: HashSet<Address>,
+    ) -> LyquidResult<()> {
+        if !self.queries.contains_key(&query_id) {
+            return Err(invalid_input("cannot plan an unknown query"));
+        }
+
+        self.expected_nodes.insert(query_id, expected_nodes);
+        self.expected_responders
+            .insert(query_id, expected_responders);
+        if let Some(initiator) = initiator {
+            self.initiator_index.insert(query_id, initiator);
+        }
+        Ok(())
+    }
+
+    /// Returns the peer nodes that should be notified about this query.
+    pub fn expected_nodes(&self, query_id: &Hash) -> Option<&[NodeID]> {
+        self.expected_nodes
+            .get(query_id)
+            .map(|nodes| nodes.as_slice())
+    }
+
+    /// Returns the node that initiated this query, if it was resolvable.
+    pub fn initiator_node(&self, query_id: &Hash) -> Option<NodeID> {
+        self.initiator_index.get(query_id).copied()
+    }
+
+    /// Returns true once every expected responder has submitted a result.
+    ///
+    /// A query without a plan is never complete. A plan with no expected
+    /// responders is complete by definition, since there is nothing to wait for.
+    pub fn is_complete(&self, query_id: &Hash) -> bool {
+        let Some(expected) = self.expected_responders.get(query_id) else {
+            return false;
+        };
+        let Some(actual) = self.responder_index.get(query_id) else {
+            return false;
+        };
+
+        expected.iter().all(|address| actual.contains(address))
     }
 
     /// Returns the number of registered queries.
@@ -282,5 +343,68 @@ mod tests {
         let mut registry = QueryRegistry::default();
         registry.insert(query.clone()).unwrap();
         assert!(registry.insert(query).is_err());
+    }
+
+    fn registered_query() -> (QueryRegistry, Hash, NodeID, Address) {
+        let query = valid_query();
+        let query_id = query.query_id;
+        let initiator = NodeID::new([1u8; 32]);
+        let peer = Address::from([2u8; 20]);
+
+        let mut registry = QueryRegistry::default();
+        registry.insert(query).unwrap();
+        (registry, query_id, initiator, peer)
+    }
+
+    #[lyquid_test::test]
+    fn rejects_plan_for_unknown_query() {
+        let mut registry = QueryRegistry::default();
+        let mut expected = new_hashset();
+        expected.insert(Address::from([2u8; 20]));
+
+        assert!(
+            registry
+                .plan(
+                    blake3::hash(b"unknown"),
+                    Some(NodeID::new([1u8; 32])),
+                    Vec::new(),
+                    expected,
+                )
+                .is_err()
+        );
+    }
+
+    #[lyquid_test::test]
+    fn complete_only_after_all_expected_responders_submit() {
+        let (mut registry, query_id, initiator, peer) = registered_query();
+        let mut expected = new_hashset();
+        expected.insert(peer);
+
+        registry
+            .plan(query_id, Some(initiator), vec![initiator], expected)
+            .unwrap();
+
+        assert_eq!(registry.initiator_node(&query_id), Some(initiator));
+        assert_eq!(registry.expected_nodes(&query_id), Some([initiator].as_slice()));
+        assert!(!registry.is_complete(&query_id));
+
+        registry.mark_responder(query_id, peer).unwrap();
+        assert!(registry.is_complete(&query_id));
+    }
+
+    #[lyquid_test::test]
+    fn unplanned_query_is_never_complete() {
+        let (registry, query_id, _, _) = registered_query();
+        assert!(!registry.is_complete(&query_id));
+    }
+
+    #[lyquid_test::test]
+    fn empty_expected_set_is_complete() {
+        let (mut registry, query_id, initiator, _) = registered_query();
+        registry
+            .plan(query_id, Some(initiator), Vec::new(), new_hashset())
+            .unwrap();
+
+        assert!(registry.is_complete(&query_id));
     }
 }

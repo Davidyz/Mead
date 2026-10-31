@@ -17,7 +17,11 @@ For example, in pi-agent, use the following:
       "args": [
         "--from",
         "git+https://github.com/Davidyz/Mead.git",
-        "mead"
+        "mead",
+        "--node-id",
+        "<NODE_ID>",
+        "--lyquid-id",
+        "<LYQUID_ID>"
       ],
       "timeout": 30,
       "exposure": "direct"

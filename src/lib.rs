@@ -90,11 +90,13 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
     expected_nodes.sort();
 
     let mut expected_responders: HashSet<Address> = new_hashset();
-    for node in &expected_nodes {
-        if let Ok(Some(address)) = lyquor_api::get_address_by_ed25519(node.0) {
+    expected_nodes.retain(|node| match lyquor_api::get_address_by_ed25519(node.0) {
+        Ok(Some(address)) => {
             expected_responders.insert(address);
+            true
         }
-    }
+        _ => false,
+    });
 
     let deadline = ChainPos::new(
         lyquor_api::chain_pos()?
@@ -145,7 +147,7 @@ fn submit_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
     let position = lyquor_api::chain_pos()?;
     if ctx.network.query_registry.is_complete(&query_id, position) {
         trigger!(
-            mark_results_ready(query_id: HashBytes = HashBytes::from(query_id)),
+            check_query_ready(query_id: HashBytes = HashBytes::from(query_id)),
             TriggerMode::Commit
         );
     }
@@ -177,7 +179,7 @@ fn expire_query(ctx: &_, query_id: HashBytes) -> LyquidResult<()> {
     }
 
     trigger!(
-        mark_results_ready(query_id: HashBytes = HashBytes::from(query_id)),
+        check_query_ready(query_id: HashBytes = HashBytes::from(query_id)),
         TriggerMode::Commit
     );
     Ok(())
@@ -255,9 +257,13 @@ fn search_request(ctx: &mut _, query_id: HashBytes) -> LyquidResult<bool> {
     Ok(true)
 }
 
-// Runs on the initiating node once every expected peer has submitted a result.
+// Checks whether a query is complete and records it locally on the initiating node.
+//
+// Triggered after a result submission or an expiry, and also callable on demand so
+// an initiating node can recover a completion signal it missed (for example after
+// a restart).
 #[method::instance]
-fn mark_results_ready(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
+fn check_query_ready(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
     let query_id = Hash::from(query_id);
 
     let position = lyquor_api::chain_pos()?;

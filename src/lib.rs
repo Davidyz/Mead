@@ -102,8 +102,12 @@ fn skill_count_response() -> LyquidResult<http::Response> {
     let count = SkillManager::shared()
         .map(|manager| manager.len())
         .unwrap_or_default();
+    Ok(skill_count_http_response(count))
+}
+
+fn skill_count_http_response(count: usize) -> http::Response {
     let body = serde_json::json!({ "count": count }).to_string();
-    Ok(http_json_response(200, &body))
+    http_json_response(200, &body)
 }
 
 // Accepts a single JSON skill object, validates it, and registers it with the
@@ -193,9 +197,92 @@ fn http_json_response(status: u16, body: &str) -> http::Response {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn test_skill(name: &str) -> Skill {
+        Skill::new(
+            name,
+            name,
+            format!("{name} description"),
+            format!("Use {name}."),
+            Vec::new(),
+        )
+    }
+
+    fn response_json(response: &http::Response) -> serde_json::Value {
+        serde_json::from_slice(&response.body).unwrap()
+    }
+
     #[lyquid_test::test]
     fn allocates_a_guest_string() {
         let greeting = String::from("hello");
         assert_eq!(greeting.as_str(), "hello");
+    }
+
+    #[lyquid_test::test]
+    fn parses_a_single_direct_serde_skill() {
+        let skill = test_skill("direct-serde");
+        let body = serde_json::to_vec(&skill).unwrap();
+
+        let (parsed, digest) = parse_uploaded_skill(Some(&body)).unwrap();
+
+        assert_eq!(parsed, skill);
+        assert_eq!(digest, skill.digest().unwrap().to_string());
+    }
+
+    #[lyquid_test::test]
+    fn parses_a_single_transport_skill() {
+        let skill = test_skill("transport-serde");
+        let body = skill.to_json().unwrap();
+
+        let (parsed, digest) = parse_uploaded_skill(Some(body.as_bytes())).unwrap();
+
+        assert_eq!(parsed, skill);
+        assert_eq!(digest, skill.digest().unwrap().to_string());
+    }
+
+    #[lyquid_test::test]
+    fn rejects_skill_arrays_and_non_objects() {
+        let skills = vec![test_skill("one"), test_skill("two")];
+        let array = serde_json::to_vec(&skills).unwrap();
+        let error = parse_uploaded_skill(Some(&array)).unwrap_err();
+        assert!(error.contains("JSON object"));
+
+        let error = parse_uploaded_skill(Some(b"null")).unwrap_err();
+        assert!(error.contains("JSON object"));
+    }
+
+    #[lyquid_test::test]
+    fn rejects_missing_and_malformed_request_bodies() {
+        let error = parse_uploaded_skill(None).unwrap_err();
+        assert!(error.contains("required"));
+
+        let error = parse_uploaded_skill(Some(b"{")).unwrap_err();
+        assert!(error.contains("invalid skill JSON"));
+    }
+
+    #[lyquid_test::test]
+    fn rejects_invalid_transport_skills() {
+        let body = serde_json::json!({
+            "name": "invalid",
+            "description": "Invalid skill.",
+            "instructions": "Use it.",
+            "resources": [{"path": "../escape", "contents": "nope"}],
+        })
+        .to_string();
+
+        let error = parse_uploaded_skill(Some(body.as_bytes())).unwrap_err();
+
+        assert!(error.contains("skill is invalid"));
+    }
+
+    #[lyquid_test::test]
+    fn count_response_reflects_manager_contents() {
+        let manager = SkillManager::from_skills([test_skill("counted")]).unwrap();
+        let response = skill_count_http_response(manager.len());
+        let body = response_json(&response);
+
+        assert_eq!(response.status, 200);
+        assert_eq!(body["count"].as_u64(), Some(1));
     }
 }

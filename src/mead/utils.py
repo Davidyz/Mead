@@ -7,6 +7,9 @@ from pathlib import Path
 class CLIArgs:
     server_url: str
     skill_dir: Path
+    node_id: str
+    lyquid_id: str
+
     upload_only: bool = False
 
 
@@ -22,6 +25,9 @@ def arg_parser() -> ArgumentParser:
         default=False,
         help="Only upload the skills to the node. Do not start the MCP.",
     )
+
+    parser.add_argument("--node-id", help="ID of the lyquid node.")
+    parser.add_argument("--lyquid-id", help="Lyquid ID to use.")
     return parser
 
 
@@ -31,4 +37,6 @@ def parse_args(args: list[str] | None = None) -> CLIArgs:
         server_url=parsed.server_url,
         skill_dir=parsed.skill_dir,
         upload_only=parsed.upload_only,
+        lyquid_id=parsed.lyquid_id,
+        node_id=parsed.node_id,
     )

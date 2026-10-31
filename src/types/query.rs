@@ -104,7 +104,7 @@ impl QueryRegistry {
     pub fn plan(
         &mut self,
         query_id: Hash,
-        initiator: Option<NodeID>,
+        initiator: NodeID,
         expected_nodes: Vec<NodeID>,
         expected_responders: HashSet<Address>,
         deadline: ChainPos,
@@ -117,9 +117,7 @@ impl QueryRegistry {
         self.expected_responders
             .insert(query_id, expected_responders);
         self.deadline_index.insert(query_id, deadline);
-        if let Some(initiator) = initiator {
-            self.initiator_index.insert(query_id, initiator);
-        }
+        self.initiator_index.insert(query_id, initiator);
         Ok(())
     }
 
@@ -396,7 +394,7 @@ mod tests {
             registry
                 .plan(
                     blake3::hash(b"unknown"),
-                    Some(NodeID::new([1u8; 32])),
+                    NodeID::new([1u8; 32]),
                     Vec::new(),
                     expected,
                     ChainPos::ZERO,
@@ -413,13 +411,7 @@ mod tests {
         let deadline = ChainPos::new(100, 0);
 
         registry
-            .plan(
-                query_id,
-                Some(initiator),
-                vec![initiator],
-                expected,
-                deadline,
-            )
+            .plan(query_id, initiator, vec![initiator], expected, deadline)
             .unwrap();
 
         assert_eq!(registry.initiator_node(&query_id), Some(initiator));
@@ -441,13 +433,7 @@ mod tests {
         let deadline = ChainPos::new(100, 0);
 
         registry
-            .plan(
-                query_id,
-                Some(initiator),
-                vec![initiator],
-                expected,
-                deadline,
-            )
+            .plan(query_id, initiator, vec![initiator], expected, deadline)
             .unwrap();
 
         assert_eq!(registry.deadline(&query_id), Some(deadline));
@@ -468,7 +454,7 @@ mod tests {
         registry
             .plan(
                 query_id,
-                Some(initiator),
+                initiator,
                 Vec::new(),
                 new_hashset(),
                 ChainPos::new(100, 0),

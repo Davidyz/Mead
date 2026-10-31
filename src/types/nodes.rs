@@ -7,6 +7,14 @@
 
 use lyquid::prelude::*;
 
+use crate::types::invalid_input;
+
+/// Maximum number of nodes accepted by the registry.
+///
+/// Registration is permissionless, so the cap bounds both the consensus state
+/// and the fan-out of search announcements.
+pub const MAX_REGISTERED_NODES: usize = 64;
+
 /// Registry of nodes that can be asked to process searches.
 #[derive(Debug, Clone)]
 pub struct NodeRegistry {
@@ -22,9 +30,19 @@ impl Default for NodeRegistry {
 }
 
 impl NodeRegistry {
-    /// Registers a node, returning `true` if it was not registered before.
-    pub fn register(&mut self, node: NodeID) -> bool {
-        self.nodes.insert(node)
+    /// Registers a node, rejecting new nodes once the registry is full.
+    ///
+    /// Registering an already-registered node is a no-op.
+    pub fn register(&mut self, node: NodeID) -> LyquidResult<()> {
+        if self.nodes.contains(&node) {
+            return Ok(());
+        }
+        if self.nodes.len() >= MAX_REGISTERED_NODES {
+            return Err(invalid_input("node registry is full"));
+        }
+
+        self.nodes.insert(node);
+        Ok(())
     }
 
     /// Returns true if the node is registered.
@@ -59,10 +77,21 @@ mod tests {
     #[lyquid_test::test]
     fn registering_a_node_is_idempotent() {
         let mut registry = NodeRegistry::default();
-        assert!(registry.register(node(1)));
-        assert!(!registry.register(node(1)));
+        registry.register(node(1)).unwrap();
+        registry.register(node(1)).unwrap();
         assert_eq!(registry.len(), 1);
         assert!(registry.contains(&node(1)));
+    }
+
+    #[lyquid_test::test]
+    fn rejects_registration_when_full() {
+        let mut registry = NodeRegistry::default();
+        for byte in 0..MAX_REGISTERED_NODES as u8 {
+            registry.register(node(byte)).unwrap();
+        }
+        assert_eq!(registry.len(), MAX_REGISTERED_NODES);
+        assert!(registry.register(node(200)).is_err());
+        assert_eq!(registry.len(), MAX_REGISTERED_NODES);
     }
 
     #[lyquid_test::test]

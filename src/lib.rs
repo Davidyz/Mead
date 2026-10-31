@@ -37,7 +37,7 @@ fn register_node(ctx: &mut _) -> LyquidResult<()> {
         .flatten()
         .ok_or_else(|| invalid_input("caller has no ed25519 identity"))?;
 
-    ctx.network.node_registry.register(node);
+    ctx.network.node_registry.register(node)?;
     Ok(())
 }
 
@@ -57,7 +57,8 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
     let query_id = query.query_id;
     let initiator = lyquor_api::get_ed25519_by_address(query.sender)
         .ok()
-        .flatten();
+        .flatten()
+        .ok_or_else(|| invalid_input("query sender has no ed25519 identity"))?;
 
     ctx.network.query_registry.insert(query)?;
 
@@ -68,7 +69,7 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
         .nodes()
         .iter()
         .copied()
-        .filter(|node| Some(*node) != initiator)
+        .filter(|node| *node != initiator)
         .collect();
     expected_nodes.sort();
 

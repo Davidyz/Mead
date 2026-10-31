@@ -10,7 +10,13 @@ pub mod types;
 pub mod verify;
 
 use types::invalid_input;
-use types::{NodeRegistry, QueryRegistry, ResultRegistry, SearchQuery, SearchResult};
+use types::{
+    NodeRegistry, QueryRegistry, ResultRegistry, SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery,
+    SearchResult,
+};
+
+/// Maximum time the initiating node waits for a UPC acknowledgement.
+const UPC_ANNOUNCE_TIMEOUT_MS: u64 = 10_000;
 
 state! {
     // On-chain registries
@@ -73,9 +79,20 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
         }
     }
 
-    ctx.network
-        .query_registry
-        .plan(query_id, initiator, expected_nodes, expected_responders)?;
+    let deadline = ChainPos::new(
+        lyquor_api::chain_pos()?
+            .block()
+            .saturating_add(SEARCH_RESPONSE_DEADLINE_BLOCKS),
+        0,
+    );
+
+    ctx.network.query_registry.plan(
+        query_id,
+        initiator,
+        expected_nodes,
+        expected_responders,
+        deadline,
+    )?;
 
     trigger!(
         announce_search(query_id: HashBytes = HashBytes::from(query_id)),
@@ -108,13 +125,44 @@ fn submit_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
         .query_registry
         .mark_responder(query_id, sender)?;
 
-    if ctx.network.query_registry.is_complete(&query_id) {
+    let position = lyquor_api::chain_pos()?;
+    if ctx.network.query_registry.is_complete(&query_id, position) {
         trigger!(
             mark_results_ready(query_id: HashBytes = HashBytes::from(query_id)),
             TriggerMode::Commit
         );
     }
 
+    Ok(())
+}
+
+// Marks a query as finished once its response deadline has passed.
+//
+// Any caller can expire a query after its deadline, so one unresponsive peer
+// cannot leave the initiating node waiting forever. The check uses the sequenced
+// chain position, which is identical on every node.
+#[method::network]
+fn expire_query(ctx: &_, query_id: HashBytes) -> LyquidResult<()> {
+    let query_id = Hash::from(query_id);
+
+    if !ctx.network.query_registry.contains(&query_id) {
+        return Err(invalid_input("query is not registered"));
+    }
+
+    let deadline = ctx
+        .network
+        .query_registry
+        .deadline(&query_id)
+        .ok_or_else(|| invalid_input("query has no response deadline"))?;
+
+    if lyquor_api::chain_pos()? < deadline {
+        return Err(invalid_input("query response deadline has not passed"));
+    }
+
+    trigger!(
+        mark_results_ready(query_id: HashBytes = HashBytes::from(query_id)),
+        TriggerMode::Commit
+    );
     Ok(())
 }
 
@@ -149,8 +197,14 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         return Ok(());
     }
 
-    let _ = upc!(
-        (ctx.lyquid_id).search_request[query_id: HashBytes = HashBytes::from(query_id)](query_id: HashBytes = HashBytes::from(query_id)) -> (accepted: bool)
+    let input = encode_by_fields!(query_id: HashBytes = HashBytes::from(query_id));
+    lyquor_api::universal_procedural_call(
+        ctx.lyquid_id,
+        None,
+        "search_request".into(),
+        Vec::from(&input[..]),
+        Some(input.into()),
+        Some(UPC_ANNOUNCE_TIMEOUT_MS),
     )?;
 
     Ok(())
@@ -189,7 +243,8 @@ fn search_request(ctx: &mut _, query_id: HashBytes) -> LyquidResult<bool> {
 fn mark_results_ready(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
     let query_id = Hash::from(query_id);
 
-    if !ctx.network.query_registry.is_complete(&query_id) {
+    let position = lyquor_api::chain_pos()?;
+    if !ctx.network.query_registry.is_complete(&query_id, position) {
         return Ok(());
     }
     if ctx.network.query_registry.initiator_node(&query_id) != Some(ctx.node_id) {

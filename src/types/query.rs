@@ -13,6 +13,13 @@ use crate::types::merkle::{deserialize_hash, serialize_hash};
 /// number of matches accepted in a result.
 pub const MAX_RESULTS_PER_PEER: u64 = 1024;
 
+/// Number of sequencer blocks a query waits for its expected responders.
+///
+/// Once this many blocks have passed since registration, the query is treated
+/// as complete with the results received so far, so one unresponsive peer
+/// cannot keep the initiating node waiting forever.
+pub const SEARCH_RESPONSE_DEADLINE_BLOCKS: u64 = 50;
+
 const QUERY_ID_DOMAIN: &[u8] = b"mead/query-id/v1";
 
 /// Registry that tracks all submitted queries and their responders.
@@ -22,6 +29,8 @@ const QUERY_ID_DOMAIN: &[u8] = b"mead/query-id/v1";
 /// - `expected_nodes`: maps query ID to the peer nodes that should be notified
 /// - `expected_responders`: maps query ID to the addresses that must respond
 /// - `initiator_index`: maps query ID to the node that started it
+/// - `deadline_index`: maps query ID to the chain position after which the
+///   query stops waiting for missing responders
 #[derive(Debug, Clone)]
 pub struct QueryRegistry {
     queries: HashMap<Hash, SearchQuery>,
@@ -29,6 +38,7 @@ pub struct QueryRegistry {
     expected_nodes: HashMap<Hash, Vec<NodeID>>,
     expected_responders: HashMap<Hash, HashSet<Address>>,
     initiator_index: HashMap<Hash, NodeID>,
+    deadline_index: HashMap<Hash, ChainPos>,
 }
 
 impl Default for QueryRegistry {
@@ -39,6 +49,7 @@ impl Default for QueryRegistry {
             expected_nodes: new_hashmap(),
             expected_responders: new_hashmap(),
             initiator_index: new_hashmap(),
+            deadline_index: new_hashmap(),
         }
     }
 }
@@ -83,17 +94,20 @@ impl QueryRegistry {
         self.responder_index.get(query_id)
     }
 
-    /// Records the peers expected to process this query and the node that started it.
+    /// Records the peers expected to process this query, the node that started
+    /// it, and the position after which missing responders no longer block.
     ///
     /// The query must already be registered. `expected_nodes` is the notification
-    /// target list handed to the UPC prepare step, and `expected_responders` is the
-    /// set of addresses that must submit a result before the query is complete.
+    /// target list handed to the UPC prepare step, `expected_responders` is the
+    /// set of addresses that must submit a result before the query is complete,
+    /// and `deadline` bounds how long that set is waited for.
     pub fn plan(
         &mut self,
         query_id: Hash,
         initiator: Option<NodeID>,
         expected_nodes: Vec<NodeID>,
         expected_responders: HashSet<Address>,
+        deadline: ChainPos,
     ) -> LyquidResult<()> {
         if !self.queries.contains_key(&query_id) {
             return Err(invalid_input("cannot plan an unknown query"));
@@ -102,6 +116,7 @@ impl QueryRegistry {
         self.expected_nodes.insert(query_id, expected_nodes);
         self.expected_responders
             .insert(query_id, expected_responders);
+        self.deadline_index.insert(query_id, deadline);
         if let Some(initiator) = initiator {
             self.initiator_index.insert(query_id, initiator);
         }
@@ -120,11 +135,20 @@ impl QueryRegistry {
         self.initiator_index.get(query_id).copied()
     }
 
-    /// Returns true once every expected responder has submitted a result.
+    /// Returns the chain position after which the query stops waiting for
+    /// missing responders.
+    pub fn deadline(&self, query_id: &Hash) -> Option<ChainPos> {
+        self.deadline_index.get(query_id).copied()
+    }
+
+    /// Returns true once every expected responder has submitted a result, or
+    /// once the response deadline at `position` has passed.
     ///
     /// A query without a plan is never complete. A plan with no expected
     /// responders is complete by definition, since there is nothing to wait for.
-    pub fn is_complete(&self, query_id: &Hash) -> bool {
+    /// After the deadline, a query is complete even if some expected peers never
+    /// answered, so their absence cannot block the initiating node forever.
+    pub fn is_complete(&self, query_id: &Hash, position: ChainPos) -> bool {
         let Some(expected) = self.expected_responders.get(query_id) else {
             return false;
         };
@@ -132,7 +156,13 @@ impl QueryRegistry {
             return false;
         };
 
-        expected.iter().all(|address| actual.contains(address))
+        if expected.iter().all(|address| actual.contains(address)) {
+            return true;
+        }
+
+        self.deadline_index
+            .get(query_id)
+            .is_some_and(|deadline| *deadline <= position)
     }
 
     /// Returns the number of registered queries.
@@ -369,6 +399,7 @@ mod tests {
                     Some(NodeID::new([1u8; 32])),
                     Vec::new(),
                     expected,
+                    ChainPos::ZERO,
                 )
                 .is_err()
         );
@@ -379,9 +410,16 @@ mod tests {
         let (mut registry, query_id, initiator, peer) = registered_query();
         let mut expected = new_hashset();
         expected.insert(peer);
+        let deadline = ChainPos::new(100, 0);
 
         registry
-            .plan(query_id, Some(initiator), vec![initiator], expected)
+            .plan(
+                query_id,
+                Some(initiator),
+                vec![initiator],
+                expected,
+                deadline,
+            )
             .unwrap();
 
         assert_eq!(registry.initiator_node(&query_id), Some(initiator));
@@ -389,25 +427,54 @@ mod tests {
             registry.expected_nodes(&query_id),
             Some([initiator].as_slice())
         );
-        assert!(!registry.is_complete(&query_id));
+        assert!(!registry.is_complete(&query_id, ChainPos::ZERO));
 
         registry.mark_responder(query_id, peer).unwrap();
-        assert!(registry.is_complete(&query_id));
+        assert!(registry.is_complete(&query_id, ChainPos::ZERO));
+    }
+
+    #[lyquid_test::test]
+    fn deadline_completes_query_with_missing_responder() {
+        let (mut registry, query_id, initiator, peer) = registered_query();
+        let mut expected = new_hashset();
+        expected.insert(peer);
+        let deadline = ChainPos::new(100, 0);
+
+        registry
+            .plan(
+                query_id,
+                Some(initiator),
+                vec![initiator],
+                expected,
+                deadline,
+            )
+            .unwrap();
+
+        assert_eq!(registry.deadline(&query_id), Some(deadline));
+        assert!(!registry.is_complete(&query_id, ChainPos::new(99, 0)));
+        assert!(registry.is_complete(&query_id, deadline));
+        assert!(registry.is_complete(&query_id, ChainPos::new(101, 0)));
     }
 
     #[lyquid_test::test]
     fn unplanned_query_is_never_complete() {
         let (registry, query_id, _, _) = registered_query();
-        assert!(!registry.is_complete(&query_id));
+        assert!(!registry.is_complete(&query_id, ChainPos::new(10_000, 0)));
     }
 
     #[lyquid_test::test]
     fn empty_expected_set_is_complete() {
         let (mut registry, query_id, initiator, _) = registered_query();
         registry
-            .plan(query_id, Some(initiator), Vec::new(), new_hashset())
+            .plan(
+                query_id,
+                Some(initiator),
+                Vec::new(),
+                new_hashset(),
+                ChainPos::new(100, 0),
+            )
             .unwrap();
 
-        assert!(registry.is_complete(&query_id));
+        assert!(registry.is_complete(&query_id, ChainPos::ZERO));
     }
 }

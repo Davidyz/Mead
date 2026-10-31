@@ -45,6 +45,11 @@ impl NodeRegistry {
         Ok(())
     }
 
+    /// Removes a node, returning `true` if it was registered.
+    pub fn unregister(&mut self, node: NodeID) -> bool {
+        self.nodes.remove(&node)
+    }
+
     /// Returns true if the node is registered.
     pub fn contains(&self, node: &NodeID) -> bool {
         self.nodes.contains(node)
@@ -92,6 +97,15 @@ mod tests {
         assert_eq!(registry.len(), MAX_REGISTERED_NODES);
         assert!(registry.register(node(200)).is_err());
         assert_eq!(registry.len(), MAX_REGISTERED_NODES);
+    }
+
+    #[lyquid_test::test]
+    fn unregistering_releases_a_slot() {
+        let mut registry = NodeRegistry::default();
+        registry.register(node(1)).unwrap();
+        assert!(registry.unregister(node(1)));
+        assert!(!registry.unregister(node(1)));
+        assert!(!registry.contains(&node(1)));
     }
 
     #[lyquid_test::test]

@@ -41,6 +41,22 @@ fn register_node(ctx: &mut _) -> LyquidResult<()> {
     Ok(())
 }
 
+// Removes the caller's own node identity from the registry.
+//
+// The identity is derived from the caller, so a node can only unregister itself.
+#[method::network]
+fn unregister_node(ctx: &mut _) -> LyquidResult<()> {
+    let node = lyquor_api::get_ed25519_by_address(ctx.caller)
+        .ok()
+        .flatten()
+        .ok_or_else(|| invalid_input("caller has no ed25519 identity"))?;
+
+    if !ctx.network.node_registry.unregister(node) {
+        return Err(invalid_input("node is not registered"));
+    }
+    Ok(())
+}
+
 // Registers a query, snapshots the peers expected to answer it, and announces it.
 //
 // The signature must be valid and the caller must be authorized to submit on
@@ -283,6 +299,28 @@ fn get_ready_queries(ctx: &_) -> LyquidResult<Vec<HashBytes>> {
         .copied()
         .map(HashBytes::from)
         .collect())
+}
+
+// Removes a handled query from this node's pending list.
+#[method::instance]
+fn ack_pending_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
+    let query_id = Hash::from(query_id);
+    ctx.instance
+        .pending_searches
+        .write()
+        .retain(|pending| *pending != query_id);
+    Ok(())
+}
+
+// Removes a handled query from this node's ready list.
+#[method::instance]
+fn ack_ready_query(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
+    let query_id = Hash::from(query_id);
+    ctx.instance
+        .ready_queries
+        .write()
+        .retain(|ready| *ready != query_id);
+    Ok(())
 }
 
 // Returns a registered query by its canonical ID.

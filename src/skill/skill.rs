@@ -521,6 +521,21 @@ mod tests {
     }
 
     #[lyquid_test::test]
+    fn direct_serde_json_round_trip() {
+        let mut original = skill(vec![SkillResource::new("a.txt", "contents").unwrap()]);
+        original.metadata.insert("author".into(), "me".into());
+        original.extra.insert(
+            "custom".into(),
+            serde_json::json!({"enabled": true, "nested": [1, "two", null]}),
+        );
+
+        let encoded = serde_json::to_vec(&original).unwrap();
+        let decoded: Skill = serde_json::from_slice(&encoded).unwrap();
+
+        assert_eq!(decoded, original);
+    }
+
+    #[lyquid_test::test]
     fn json_uses_name_as_id_when_absent() {
         let json = r#"{
             "name": "json-skill",

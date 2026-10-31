@@ -221,7 +221,13 @@ mod tests {
 
     #[lyquid_test::test]
     fn parses_a_single_direct_serde_skill() {
-        let skill = test_skill("direct-serde");
+        let skill = Skill::new(
+            "direct-serde",
+            "direct-serde",
+            "Direct serde description.",
+            "Use direct serde.",
+            vec![crate::skill::SkillResource::new("nested/a.txt", "contents").unwrap()],
+        );
         let body = serde_json::to_vec(&skill).unwrap();
 
         let (parsed, digest) = parse_uploaded_skill(Some(&body)).unwrap();

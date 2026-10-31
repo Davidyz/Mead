@@ -1,10 +1,13 @@
 pub mod merkle;
+pub mod nodes;
 pub mod query;
 pub mod results;
 
 pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection};
+pub use nodes::NodeRegistry;
 pub use query::{
-    MAX_RESULTS_PER_PEER, QueryParams, QueryRegistry, ResultsPerPeer, SearchQuery, compute_query_id,
+    MAX_RESULTS_PER_PEER, QueryParams, QueryRegistry, ResultsPerPeer,
+    SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery, compute_query_id,
 };
 pub use results::{Bm25Score, MAX_MATCHES, ResultRegistry, SearchResult, SkillMatch};
 

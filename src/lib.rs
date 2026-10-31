@@ -5,10 +5,13 @@
 
 use lyquid::prelude::lyquor_primitives::HashBytes;
 use lyquid::prelude::*;
+use std::sync::Arc;
+
 pub mod skill;
 pub mod types;
 pub mod verify;
 
+use skill::{Skill, SkillError, SkillManager};
 use types::invalid_input;
 use types::{QueryRegistry, ResultRegistry, SearchQuery, SearchResult};
 
@@ -87,6 +90,105 @@ fn get_responders(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<Address>> {
         .unwrap_or_default();
     responders.sort_by(|left, right| left.as_slice().cmp(right.as_slice()));
     Ok(responders)
+}
+
+// Returns the number of skills currently registered on this node.
+#[method::instance(export = http, method = "GET", path_prefix = "/skills/count")]
+fn get_skill_count(_ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
+    skill_count_response()
+}
+
+fn skill_count_response() -> LyquidResult<http::Response> {
+    let count = SkillManager::shared()
+        .map(|manager| manager.len())
+        .unwrap_or_default();
+    let body = serde_json::json!({ "count": count }).to_string();
+    Ok(http_json_response(200, &body))
+}
+
+// Accepts a single JSON skill object, validates it, and registers it with the
+// node-local skill manager.
+//
+// The object uses the same representation as `Skill`'s serde implementation.
+// The JSON transport form produced by `Skill::to_json` is accepted as well, so
+// clients may send resource contents without precomputing their digests.
+// Upload endpoint under `/skills`.
+#[method::instance(export = http, method = "POST", path_prefix = "/skills/upload")]
+fn upload_skills_at_skills_upload(_ctx: &_, req: http::Request) -> LyquidResult<http::Response> {
+    handle_skill_upload(req)
+}
+
+fn handle_skill_upload(req: http::Request) -> LyquidResult<http::Response> {
+    let (skill, digest) = match parse_uploaded_skill(req.body.as_deref()) {
+        Ok(skill) => skill,
+        Err(message) => return Ok(http_json_response(400, &json_error(&message))),
+    };
+
+    if let Err(error) = register_uploaded_skill(&skill) {
+        return Ok(http_json_response(500, &json_error(&error.to_string())));
+    }
+
+    let body = serde_json::json!({
+        "uploaded": 1,
+        "digests": [digest],
+    })
+    .to_string();
+    Ok(http_json_response(200, &body))
+}
+
+fn parse_uploaded_skill(body: Option<&[u8]>) -> Result<(Skill, String), String> {
+    let body = body.ok_or_else(|| "request body is required".to_owned())?;
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|error| format!("invalid skill JSON: {error}"))?;
+    if !value.is_object() {
+        return Err("request body must be a JSON object representing one skill".to_owned());
+    }
+
+    let skill = match serde_json::from_value::<Skill>(value.clone()) {
+        Ok(skill) => skill,
+        Err(direct_error) => {
+            let encoded = serde_json::to_string(&value)
+                .map_err(|error| format!("failed to re-encode skill: {error}"))?;
+            Skill::from_json(&encoded).map_err(|error| {
+                format!("skill is invalid (serde: {direct_error}; transport: {error})")
+            })?
+        }
+    };
+
+    let digest = skill
+        .digest()
+        .map_err(|error| format!("skill is invalid: {error}"))?
+        .to_string();
+    Ok((skill, digest))
+}
+
+fn register_uploaded_skill(skill: &Skill) -> Result<(), SkillError> {
+    let manager = match SkillManager::shared() {
+        Ok(manager) => Arc::clone(manager),
+        Err(SkillError::NotInitialized) => match SkillManager::init_shared(Vec::new()) {
+            Ok(manager) => manager,
+            Err(SkillError::AlreadyInitialized) => Arc::clone(SkillManager::shared()?),
+            Err(error) => return Err(error),
+        },
+        Err(error) => return Err(error),
+    };
+
+    manager.append(skill.clone())
+}
+
+fn json_error(message: &str) -> String {
+    serde_json::json!({ "error": message }).to_string()
+}
+
+fn http_json_response(status: u16, body: &str) -> http::Response {
+    http::Response {
+        status,
+        headers: vec![http::Header {
+            name: "content-type".to_owned(),
+            value: b"application/json".to_vec(),
+        }],
+        body: body.as_bytes().to_vec(),
+    }
 }
 
 #[cfg(test)]

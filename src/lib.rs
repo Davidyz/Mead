@@ -5,6 +5,7 @@
 
 use lyquid::prelude::lyquor_primitives::HashBytes;
 use lyquid::prelude::*;
+use lyquid::println;
 use std::sync::Arc;
 
 pub mod skill;
@@ -102,6 +103,7 @@ fn skill_count_response() -> LyquidResult<http::Response> {
     let count = SkillManager::shared()
         .map(|manager| manager.len())
         .unwrap_or_default();
+    println!("mead: skill count requested: count={count}");
     Ok(skill_count_http_response(count))
 }
 
@@ -131,6 +133,11 @@ fn handle_skill_upload(req: http::Request) -> LyquidResult<http::Response> {
     if let Err(error) = register_uploaded_skill(&skill) {
         return Ok(http_json_response(500, &json_error(&error.to_string())));
     }
+
+    println!(
+        "mead: accepted skill name={:?} description={:?} digest={digest}",
+        skill.name, skill.description
+    );
 
     let body = serde_json::json!({
         "uploaded": 1,

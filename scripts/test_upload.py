@@ -6,11 +6,12 @@ Usage:
 
 The URL is normally the base URL printed by `shaker serve`. To bypass
 `shaker serve` and call a node directly, pass `--host` with the Lyquid's
-virtual host (`<lyquid-label>.<node-label>`). By default the script uploads
-every skill under `tests/skills/skills` to `POST /skills/upload`, one skill per
-request. Use `--path` to override the upload path, `--count` to query
-`/skills/count`, and `--dry-run` to inspect the JSON payload without sending
-it.
+virtual host (`<lyquid-label>.<node-label>`), or pass `--lyquid-id` and
+`--node-id` separately and let the script build the header. By default the
+script uploads every skill under `tests/skills/skills` to `POST /skills/upload`,
+one skill per request. Use `--path` to override the upload path, `--count` to
+query `/skills/count`, and `--dry-run` to inspect the JSON payload without
+sending it.
 """
 
 from __future__ import annotations
@@ -132,6 +133,27 @@ def discover_skills(skill_dir: Path, limit: int | None) -> list[dict[str, Any]]:
     return skills
 
 
+def strip_id_prefix(value: str, prefix: str) -> str:
+    value = value.strip()
+    return value.removeprefix(prefix)
+
+
+def resolve_virtual_host(args: argparse.Namespace) -> str | None:
+    if args.host is not None:
+        if args.lyquid_id is not None or args.node_id is not None:
+            raise SystemExit("use either --host or --lyquid-id/--node-id, not both")
+        return args.host
+
+    if (args.lyquid_id is None) != (args.node_id is None):
+        raise SystemExit("--lyquid-id and --node-id must be provided together")
+    if args.lyquid_id is None:
+        return None
+
+    lyquid_label = strip_id_prefix(args.lyquid_id, "Lyquid-")
+    node_label = strip_id_prefix(args.node_id, "Node-")
+    return f"{lyquid_label}.{node_label}"
+
+
 def request_headers(
     host: str | None, *, content_type: str | None = None
 ) -> dict[str, str]:
@@ -245,6 +267,14 @@ def parse_args() -> argparse.Namespace:
         help="Virtual Host header for direct node access: <lyquid-label>.<node-label>",
     )
     parser.add_argument(
+        "--lyquid-id",
+        help="Lyquid ID; the Lyquid- prefix is stripped when building --host",
+    )
+    parser.add_argument(
+        "--node-id",
+        help="Node ID; the Node- prefix is stripped when building --host",
+    )
+    parser.add_argument(
         "--skill-dir",
         type=Path,
         default=DEFAULT_SKILL_DIR,
@@ -281,8 +311,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    host = resolve_virtual_host(args)
     if args.count:
-        get_skill_count(args.url, args.count_path, args.timeout, args.host)
+        get_skill_count(args.url, args.count_path, args.timeout, host)
         return
 
     if not args.skill_dir.is_dir():
@@ -296,7 +327,7 @@ def main() -> None:
         print(json.dumps(skills, indent=2, ensure_ascii=False))
         return
 
-    upload(args.url, args.path, skills, args.timeout, args.host)
+    upload(args.url, args.path, skills, args.timeout, host)
 
 
 if __name__ == "__main__":

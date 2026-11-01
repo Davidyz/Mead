@@ -31,6 +31,10 @@ runs:
       run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
       shell: bash
 
+    - name: Wait for devnet bootstrap
+      run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml wait setup-devnet
+      shell: bash
+
     - name: Pull skills and build the fixture
       run: make prepare-skills
       shell: bash

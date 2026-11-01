@@ -15,7 +15,9 @@ class CLIArgs:
 
 def arg_parser() -> ArgumentParser:
     parser = ArgumentParser("mead")
-    parser.add_argument("--server-url", help="URL to the lyquid node.")
+    parser.add_argument(
+        "--server-url", help="URL to the lyquid node.", default="http://127.0.0.1:10087"
+    )
     parser.add_argument(
         "--skill-dir", help="Path to the directory that contains skills."
     )

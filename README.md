@@ -29,3 +29,22 @@ For example, in pi-agent, use the following:
   }
 }
 ```
+
+## Uploading Skills
+
+The MCP uploads every skill under `--skill-dir` when it starts. To run only the
+upload step and exit, use `--upload-only`:
+
+```bash
+uv run mead \
+  --upload-only \
+  --server-url http://127.0.0.1:10087 \
+  --skill-dir /path/to/skills \
+  --node-id '<NODE_ID>' \
+  --lyquid-id '<LYQUID_ID>'
+```
+
+The `Lyquid-` and `Node-` display prefixes are optional. The command builds the
+virtual host header (`<lyquid-label>.<node-label>`) required to route requests
+to a node directly, and prints how many local skills were loaded and uploaded
+plus the node's current skill count.

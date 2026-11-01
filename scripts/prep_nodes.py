@@ -2,8 +2,11 @@
 
 This performs the full local devnet preparation:
 
-1. Deploy the repository's Lyquid with ``shaker deploy Cargo.toml -o json``,
-   unless an existing Lyquid ID is supplied with ``--lyquid-id``.
+1. Publish and deploy the repository's Lyquid with
+   ``shaker deploy Cargo.toml --reference <ref> -o json``, unless an existing
+   Lyquid ID is supplied with ``--lyquid-id``. Publishing to the devnet's OCI
+   registry lets the other nodes pull the image; without it only the node that
+   received the deploy can host the Lyquid.
 2. Discover the four node containers with ``docker container ls``.
 3. Read each node's ID from its container logs.
 4. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
@@ -45,6 +48,12 @@ SKILLS_PER_NODE = 4
 DEFAULT_NODE_PORT = 10087
 NODE_PORT_STEP = 1000
 NODE_READY_TIMEOUT = 60.0
+
+# OCI reference used to publish the built Lyquid. The multi-node Docker devnet
+# exposes its registry on port 8000, and nodes fall back to
+# ``http://registry:8000/lyquids`` (see the devnet's ``nodeN.toml``). The tag is
+# arbitrary because deployments are pinned to the pushed digest.
+DEFAULT_LYQUID_REFERENCE = "http://127.0.0.1:8000/lyquids:mead"
 
 NODE_CONTAINER_RE = re.compile(r"(?:^|[-_])node(?P<index>\d+)(?:[-_]|$)")
 NODE_ID_RE = re.compile(
@@ -99,8 +108,12 @@ def parse_json_output(output: str) -> dict[str, object]:
 
 
 def deploy_lyquid() -> str:
-    print("Deploying Cargo.toml...")
-    process = run(["shaker", "deploy", "Cargo.toml", "-o", "json"], capture_output=True)
+    reference = os.environ.get("LYQUID_REFERENCE", DEFAULT_LYQUID_REFERENCE)
+    print(f"Deploying Cargo.toml to {reference}...")
+    process = run(
+        ["shaker", "deploy", "Cargo.toml", "--reference", reference, "-o", "json"],
+        capture_output=True,
+    )
     if process.stderr:
         print(process.stderr, file=sys.stderr, end="")
 

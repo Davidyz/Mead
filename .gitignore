@@ -22,6 +22,7 @@ lyquid_tools_target
 
 # Skill artifacts dir for testing
 tests/skills
+tests/fixture
 
 #--------------------------------------------------#
 # The following was generated with gitignore.nvim: #

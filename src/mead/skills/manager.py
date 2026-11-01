@@ -35,7 +35,17 @@ class SkillManager:
                 continue
             self.add_skill(parsed)
 
-    def list_skill(self) -> list[dict[str, str]]:
+    def list_skills(self) -> list[Skill]:
+        return list(self._skills.values())
+
+    def get_skill(self, name: str) -> Skill | None:
+        for skill in self.list_skills():
+            if skill.name == name or skill.id == name:
+                return skill
+        return None
+
+    # === MCP-related methods ===
+    def mcp_list_skill(self) -> list[dict[str, str]]:
         """List every skill name with its description."""
         return [
             {"name": skill.name, "description": skill.description}
@@ -45,7 +55,7 @@ class SkillManager:
             )
         ]
 
-    def get_skill(
+    def mcp_get_skill(
         self,
         name: str,
         detail: Literal["description", "full"],
@@ -90,6 +100,6 @@ class SkillManager:
 
     def make_mcp_server(self) -> MCPServer:
         mcp_server = MCPServer("mead")
-        mcp_server.add_tool(self.list_skill)
-        mcp_server.add_tool(self.get_skill)
+        mcp_server.add_tool(self.mcp_list_skill, name="list_skill")
+        mcp_server.add_tool(self.mcp_get_skill, name="get_skill")
         return mcp_server

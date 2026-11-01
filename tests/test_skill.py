@@ -406,7 +406,7 @@ def test_manager_deduplicates_canonically_equal_skills() -> None:
     assert list(manager._skills.values()) == [first]
 
 
-def test_get_skill_exposes_description_or_selected_resources() -> None:
+def test_mcp_get_skill_exposes_description_or_selected_resources() -> None:
     skill = Skill.from_manifest(
         {
             "id": "custom-id",
@@ -423,9 +423,9 @@ def test_get_skill_exposes_description_or_selected_resources() -> None:
     manager = SkillManager()
     manager.add_skill(skill)
 
-    assert manager.get_skill("custom-id", "description") == "A demo skill"
+    assert manager.mcp_get_skill("custom-id", "description") == "A demo skill"
 
-    full = manager.get_skill("demo", "full", ["nested/b.txt"])
+    full = manager.mcp_get_skill("demo", "full", ["nested/b.txt"])
     assert "# demo" in full
     assert "Use this skill." in full
     assert "## Resource: nested/b.txt\n\nB" in full
@@ -433,7 +433,7 @@ def test_get_skill_exposes_description_or_selected_resources() -> None:
     assert "- a.txt" in full
 
 
-def test_get_skill_rejects_unknown_skills_and_resources() -> None:
+def test_mcp_get_skill_rejects_unknown_skills_and_resources() -> None:
     skill = Skill.from_manifest(
         {"name": "demo", "description": "A demo skill"},
         "Body",
@@ -443,12 +443,12 @@ def test_get_skill_rejects_unknown_skills_and_resources() -> None:
     manager.add_skill(skill)
 
     with pytest.raises(ValueError, match="Could not find a skill named missing"):
-        manager.get_skill("missing", "full")
+        manager.mcp_get_skill("missing", "full")
     with pytest.raises(ValueError, match="does not contain resources: missing.txt"):
-        manager.get_skill("demo", "full", ["missing.txt"])
+        manager.mcp_get_skill("demo", "full", ["missing.txt"])
 
 
-def test_list_skill_returns_names_and_descriptions_in_order() -> None:
+def test_mcp_list_skill_returns_names_and_descriptions_in_order() -> None:
     manager = SkillManager()
     manager.add_skill(
         Skill.from_manifest(
@@ -461,7 +461,7 @@ def test_list_skill_returns_names_and_descriptions_in_order() -> None:
         )
     )
 
-    assert manager.list_skill() == [
+    assert manager.mcp_list_skill() == [
         {"name": "alpha", "description": "The first skill"},
         {"name": "zeta", "description": "The last skill"},
     ]

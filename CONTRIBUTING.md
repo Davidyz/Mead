@@ -1,12 +1,42 @@
+# Development Requirements
+
+- [uv](https://docs.astral.sh/uv/) is required for managing the Python environment and running project commands such as `uv run`.
+
 # Testing
 
 The standard way to run tests for Lyquid is `shaker test Cargo.toml`.
 
 For this app, some test cases are integration tests that require loading actual skills.
-To prepare the skill catalog for those tests, run `make prepare` before running the tests.
+To prepare the skill catalog for those tests, run `make prepare-skills` before running the tests.
 
 Run the Python unit tests with `make test`. This downloads the skill fixtures via
-`make prepare` first if they are not already present.
+`make prepare-skills` first if they are not already present.
+
+## Preparing a Multi-Node Devnet
+
+`scripts/prep_nodes.py` deploys Mead, creates per-node skill fixtures under
+`tests/fixture/node{1,2,3,4}/`, writes `tests/fixture/nodes.json` with the
+Lyquid/node IDs, ports, and selected fixture skill names, uploads the fixtures,
+and prints the skills each node reports. It requires the stock multi-node Docker
+devnet from the LDK to be running:
+
+```bash
+docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
+```
+
+Then run:
+
+```bash
+make prepare-nodes
+```
+
+To reuse an existing deployment instead of deploying again, pass its Lyquid ID:
+
+```bash
+make prepare-nodes LYQUID_ID=Lyquid-...
+```
+
+The script can also be run directly with `uv run python scripts/prep_nodes.py`.
 
 # Creating a new Commit
 

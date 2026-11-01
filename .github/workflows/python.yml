@@ -7,6 +7,7 @@ on:
       - "uv.lock"
       - "Makefile"
       - "scripts/**"
+      - ".github/actions/**"
       - ".github/workflows/python.yml"
 
 jobs:

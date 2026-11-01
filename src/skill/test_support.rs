@@ -1,7 +1,7 @@
 //! Shared test fixtures loaded from the prepared real skill catalog.
 //!
 //! Guest tests cannot access the filesystem, so catalog files are embedded at
-//! compile time. Run `make prepare` before compiling tests.
+//! compile time. Run `make prepare-skills` before compiling tests.
 
 use super::{MarkdownFile, Skill, SkillResource, TextFile};
 

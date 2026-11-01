@@ -112,6 +112,32 @@ fn skill_count_http_response(count: usize) -> http::Response {
     http_json_response(200, &body)
 }
 
+// Returns the name, description, and digest of every skill registered on this
+// node.
+#[method::instance(export = http, method = "GET", path_prefix = "/skills/list")]
+fn list_skills(_ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
+    let body = match SkillManager::shared() {
+        Ok(manager) => skill_list_json(manager),
+        Err(SkillError::NotInitialized) => "[]".to_owned(),
+        Err(error) => return Ok(http_json_response(500, &json_error(&error.to_string()))),
+    };
+    Ok(http_json_response(200, &body))
+}
+
+fn skill_list_json(manager: &SkillManager) -> String {
+    let skills: Vec<_> = manager
+        .iter()
+        .map(|(digest, skill)| {
+            serde_json::json!({
+                "name": skill.name,
+                "description": skill.description,
+                "digest": digest.to_string(),
+            })
+        })
+        .collect();
+    serde_json::json!(skills).to_string()
+}
+
 // Accepts a single JSON skill object, validates it, and registers it with the
 // node-local skill manager.
 //
@@ -297,5 +323,24 @@ mod tests {
 
         assert_eq!(response.status, 200);
         assert_eq!(body["count"].as_u64(), Some(1));
+    }
+
+    #[lyquid_test::test]
+    fn list_response_contains_name_description_and_digest() {
+        let skill = test_skill("listed");
+        let digest = skill.digest().unwrap().to_string();
+        let manager = SkillManager::from_skills([skill.clone()]).unwrap();
+
+        let body: serde_json::Value = serde_json::from_str(&skill_list_json(&manager)).unwrap();
+        let entries = body.as_array().unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"].as_str(), Some(skill.name.as_str()));
+        assert_eq!(
+            entries[0]["description"].as_str(),
+            Some(skill.description.as_str())
+        );
+        assert_eq!(entries[0]["digest"].as_str(), Some(digest.as_str()));
+        assert_eq!(entries[0].as_object().unwrap().len(), 3);
     }
 }

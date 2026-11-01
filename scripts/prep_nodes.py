@@ -64,13 +64,24 @@ class Node:
 def run(
     command: list[str], *, capture_output: bool = False
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command,
-        cwd=ROOT,
-        check=True,
-        text=True,
-        capture_output=capture_output,
-    )
+    try:
+        return subprocess.run(
+            command,
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=capture_output,
+        )
+    except subprocess.CalledProcessError as error:
+        print(
+            f"Command failed ({error.returncode}): {' '.join(command)}",
+            file=sys.stderr,
+        )
+        if error.stdout:
+            print(error.stdout, file=sys.stderr, end="")
+        if error.stderr:
+            print(error.stderr, file=sys.stderr, end="")
+        raise
 
 
 def parse_json_output(output: str) -> dict[str, object]:

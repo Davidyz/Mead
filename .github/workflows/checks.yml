@@ -9,6 +9,7 @@ on:
       - ".cargo/**"
       - "Makefile"
       - "scripts/**"
+      - ".github/actions/**"
       - ".github/workflows/checks.yml"
 
 jobs:

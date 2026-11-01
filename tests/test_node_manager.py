@@ -1,88 +1,86 @@
+import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 
-from mead import node_manager
+from mead.node_manager import NodeManager, SkillSummary, UploadSkillResponse
 from mead.skills import Skill
 from mead.utils import CLIArgs
 
+FIXTURE_DIR = Path(__file__).parent / "fixture"
+NODES_JSON = FIXTURE_DIR / "nodes.json"
+NODE_INDEXES = [1, 2, 3, 4]
 
-@pytest.fixture
-def cli_args() -> CLIArgs:
-    return CLIArgs(
-        server_url="http://127.0.0.1:10087/",
-        skill_dir=Path("."),
-        node_id="Node-node-label",
-        lyquid_id="Lyquid-lyquid-label",
+
+@pytest.fixture(scope="session")
+def devnet() -> dict[str, Any]:
+    if not NODES_JSON.is_file():
+        pytest.skip("devnet fixture is missing; run `make prepare-nodes` first")
+
+    data = json.loads(NODES_JSON.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
+        raise TypeError(f"{NODES_JSON} does not contain a node list")
+    return data
+
+
+def node_manager(
+    devnet: dict[str, Any], index: int
+) -> tuple[NodeManager, dict[str, Any]]:
+    node = next(node for node in devnet["nodes"] if node["index"] == index)
+    return (
+        NodeManager(
+            CLIArgs(
+                server_url=f"http://127.0.0.1:{node['port']}",
+                skill_dir=FIXTURE_DIR / f"node{index}",
+                node_id=node["node_id"],
+                lyquid_id=devnet["lyquid_id"],
+            )
+        ),
+        node,
     )
 
 
-def test_list_skills_sends_virtual_host_and_returns_dataclasses(
-    cli_args: CLIArgs, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("index", NODE_INDEXES)
+def test_list_skills_returns_live_node_skills(
+    devnet: dict[str, Any], index: int
 ) -> None:
-    calls: list[tuple[str, dict[str, str]]] = []
+    manager, node = node_manager(devnet, index)
 
-    def fake_get(url: str, *, headers: dict[str, str]) -> httpx.Response:
-        calls.append((url, headers))
-        return httpx.Response(
-            200,
-            json=[
-                {
-                    "name": "demo",
-                    "description": "A demo skill.",
-                    "digest": "abc",
-                }
-            ],
-        )
+    try:
+        skills = manager.list_skills()
+    except httpx.TransportError as error:
+        pytest.skip(f"devnet node{index} is not available: {error}")
 
-    monkeypatch.setattr(node_manager.httpx, "get", fake_get)
-
-    skills = node_manager.NodeManager(cli_args).list_skills()
-
-    assert skills == [
-        node_manager.SkillSummary(
-            name="demo", description="A demo skill.", digest="abc"
-        )
-    ]
-    assert calls == [
-        (
-            "http://127.0.0.1:10087/skills/list",
-            {
-                "accept": "application/json",
-                "Host": "lyquid-label.node-label",
-            },
-        )
-    ]
+    assert skills
+    assert all(isinstance(skill, SkillSummary) for skill in skills)
+    assert all(skill.digest for skill in skills)
+    assert {skill.name for skill in skills} == set(node["skills"])
 
 
-def test_upload_skill_sends_transport_json_and_returns_dataclasses(
-    cli_args: CLIArgs, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("index", NODE_INDEXES)
+def test_upload_skill_round_trips_through_live_node(
+    devnet: dict[str, Any], index: int
 ) -> None:
-    calls: list[tuple[str, dict[str, str], dict[str, object]]] = []
-    skill = Skill.from_manifest(
-        {"name": "demo", "description": "A demo skill."}, "Use it."
+    manager, _ = node_manager(devnet, index)
+    skill_dirs = sorted(
+        path.parent for path in (FIXTURE_DIR / f"node{index}").glob("*/SKILL.md")
     )
+    if not skill_dirs:
+        pytest.skip(f"node{index} fixture skills are missing")
 
-    def fake_post(
-        url: str, *, headers: dict[str, str], json: dict[str, object]
-    ) -> httpx.Response:
-        calls.append((url, headers, json))
-        return httpx.Response(200, json={"uploaded": 1, "digests": ["abc"]})
+    skill = Skill(skill_dirs[0])
+    try:
+        response = manager.upload_skill(skill)
+        skills = manager.list_skills()
+    except httpx.TransportError as error:
+        pytest.skip(f"devnet node{index} is not available: {error}")
 
-    monkeypatch.setattr(node_manager.httpx, "post", fake_post)
-
-    response = node_manager.NodeManager(cli_args).upload_skill(skill)
-
-    assert response == node_manager.UploadSkillResponse(uploaded=1, digests=["abc"])
-    assert calls == [
-        (
-            "http://127.0.0.1:10087/skills/upload",
-            {
-                "accept": "application/json",
-                "content-type": "application/json",
-                "Host": "lyquid-label.node-label",
-            },
-            skill.to_dict(),
-        )
-    ]
+    assert isinstance(response, UploadSkillResponse)
+    assert response.uploaded == 1
+    assert len(response.digests) == 1
+    assert any(
+        candidate.name == skill.name and candidate.digest == response.digests[0]
+        for candidate in skills
+    )

@@ -32,5 +32,9 @@ runs:
       shell: bash
 
     - name: Pull skills and build the fixture
-      run: make prepare
+      run: make prepare-skills
+      shell: bash
+
+    - name: Deploy Mead and prepare node fixtures
+      run: make prepare-nodes
       shell: bash

@@ -9,7 +9,7 @@ This performs the full local devnet preparation:
 4. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
    each node directory.
 5. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
-   and ports for integration tests.
+   ports, and selected fixture skill names for integration tests.
 6. Upload each node's fixture directory with ``uv run mead --upload-only``.
 
 Skills containing non-UTF-8 resources are excluded because the canonical skill
@@ -33,6 +33,7 @@ from pathlib import Path
 import httpx
 
 from mead.node_manager import NodeManager, SkillSummary
+from mead.skills import Skill
 from mead.utils import CLIArgs
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -183,7 +184,7 @@ def has_only_text_resources(skill_dir: Path) -> bool:
 def supported_skills() -> list[Path]:
     if not SKILLS_DIR.is_dir():
         raise RuntimeError(
-            f"{SKILLS_DIR} is missing; run `make prepare` first to fetch the skill catalog"
+            f"{SKILLS_DIR} is missing; run `make prepare-skills` first to fetch the skill catalog"
         )
 
     supported: list[Path] = []
@@ -234,7 +235,11 @@ def prepare_fixture(assignments: list[list[Path]]) -> dict[int, Path]:
     return fixture_dirs
 
 
-def write_nodes_json(nodes: list[Node], lyquid_id: str) -> Path:
+def write_nodes_json(
+    nodes: list[Node],
+    lyquid_id: str,
+    assignments: list[list[Path]],
+) -> Path:
     path = FIXTURE_DIR / "nodes.json"
     payload = {
         "lyquid_id": lyquid_id,
@@ -244,6 +249,9 @@ def write_nodes_json(nodes: list[Node], lyquid_id: str) -> Path:
                 "node_id": node.node_id,
                 "container": node.container,
                 "port": node.port,
+                "skills": [
+                    Skill(skill_dir).name for skill_dir in assignments[node.index - 1]
+                ],
             }
             for node in nodes
         ],
@@ -314,12 +322,19 @@ def list_deployed_skills(node: Node, lyquid_id: str) -> list[SkillSummary]:
     return node_manager.list_skills()
 
 
-def print_deployed_skills(nodes: list[Node], lyquid_id: str) -> None:
+def collect_deployed_skills(
+    nodes: list[Node], lyquid_id: str
+) -> dict[int, list[SkillSummary]]:
+    return {node.index: list_deployed_skills(node, lyquid_id) for node in nodes}
+
+
+def print_deployed_skills(
+    nodes: list[Node], deployed_skills: dict[int, list[SkillSummary]]
+) -> None:
     print("\nDeployed skills by node:")
     for node in nodes:
-        skills = list_deployed_skills(node, lyquid_id)
         print(f"node{node.index} ({node.node_id}):")
-        for skill in skills:
+        for skill in deployed_skills[node.index]:
             print(f"  - {skill.name}")
 
 
@@ -350,13 +365,15 @@ def main() -> None:
     ]
 
     skills = supported_skills()
-    fixture_dirs = prepare_fixture(select_fixture_skills(skills))
-    write_nodes_json(nodes, lyquid_id)
+    assignments = select_fixture_skills(skills)
+    fixture_dirs = prepare_fixture(assignments)
+    write_nodes_json(nodes, lyquid_id, assignments)
 
     for node in nodes:
         upload_skills(node, fixture_dirs[node.index], lyquid_id)
 
-    print_deployed_skills(nodes, lyquid_id)
+    deployed_skills = collect_deployed_skills(nodes, lyquid_id)
+    print_deployed_skills(nodes, deployed_skills)
 
 
 if __name__ == "__main__":

@@ -8,9 +8,9 @@ LYQUID_ID ?=
 PREP_NODES_ARGS := $(if $(LYQUID_ID),--lyquid-id $(LYQUID_ID),)
 
 
-.PHONY: prepare prepare-nodes check-ldk test cleanup
+.PHONY: prepare-skills prepare-nodes check-ldk test cleanup
 
-prepare: cleanup
+prepare-skills: cleanup
 	uv sync --group dev
 	@python ./scripts/prep_skills.py
 
@@ -39,4 +39,4 @@ test-python: tests/skills/skills
 	uv run pytest tests
 
 tests/skills/skills:
-	@$(MAKE) prepare
+	@$(MAKE) prepare-skills

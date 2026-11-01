@@ -8,7 +8,9 @@ This performs the full local devnet preparation:
 3. Read each node's ID from its container logs.
 4. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
    each node directory.
-5. Upload each node's fixture directory with ``uv run mead --upload-only``.
+5. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
+   and ports for integration tests.
+6. Upload each node's fixture directory with ``uv run mead --upload-only``.
 
 Skills containing non-UTF-8 resources are excluded because the canonical skill
 format only supports text resources.
@@ -232,6 +234,25 @@ def prepare_fixture(assignments: list[list[Path]]) -> dict[int, Path]:
     return fixture_dirs
 
 
+def write_nodes_json(nodes: list[Node], lyquid_id: str) -> Path:
+    path = FIXTURE_DIR / "nodes.json"
+    payload = {
+        "lyquid_id": lyquid_id,
+        "nodes": [
+            {
+                "index": node.index,
+                "node_id": node.node_id,
+                "container": node.container,
+                "port": node.port,
+            }
+            for node in nodes
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"Wrote {path.relative_to(ROOT)}")
+    return path
+
+
 def upload_skills(node: Node, fixture_dir: Path, lyquid_id: str) -> None:
     wait_for_lyquid(node, lyquid_id)
     print(f"Uploading {fixture_dir.relative_to(ROOT)} to node{node.index}...")
@@ -330,6 +351,7 @@ def main() -> None:
 
     skills = supported_skills()
     fixture_dirs = prepare_fixture(select_fixture_skills(skills))
+    write_nodes_json(nodes, lyquid_id)
 
     for node in nodes:
         upload_skills(node, fixture_dirs[node.index], lyquid_id)

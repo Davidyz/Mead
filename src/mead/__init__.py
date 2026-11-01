@@ -29,12 +29,14 @@ async def main_coro() -> None:
 
     if cli_args.upload_only:
         print(f"Loaded {len(loaded_skills)} skills.")
+        return_val = 0
         if uploaded_skill_count != len(loaded_skills):
             print(f"Only {uploaded_skill_count} skills were uploaded successfully.")
+            return_val = 1
         print(
             f"Node {cli_args.node_id} now has {len(node_manager.list_skills())} skills."
         )
-        sys.exit(0)
+        sys.exit(return_val)
     else:
         server = skill_manager.make_mcp_server()
         await server.run_stdio_async()

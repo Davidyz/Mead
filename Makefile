@@ -4,7 +4,10 @@ CRATE_NORM := $(shell echo "$(CRATE_VER)" | sed 's/+.*//')
 SHAKER_NORM := $(shell echo $(SHAKER_VER) | sed 's/+.*//')
 
 
+.PHONY: prepare check-ldk test cleanup
+
 prepare: cleanup
+	uv sync --group dev
 	@python ./scripts/prep_skills.py
 
 cleanup:
@@ -18,3 +21,11 @@ check-ldk:
 	else \
 		echo "✗ Versions DO NOT match!"; exit 1; \
 	fi
+
+test: test-python
+
+test-python: tests/skills/skills
+	uv run pytest tests
+
+tests/skills/skills:
+	@$(MAKE) prepare

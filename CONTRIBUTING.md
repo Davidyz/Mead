@@ -5,6 +5,9 @@ The standard way to run tests for Lyquid is `shaker test Cargo.toml`.
 For this app, some test cases are integration tests that require loading actual skills.
 To prepare the skill catalog for those tests, run `make prepare` before running the tests.
 
+Run the Python unit tests with `make test`. This downloads the skill fixtures via
+`make prepare` first if they are not already present.
+
 # Creating a new Commit
 
 When making a new commit, write a concise commit message that describes what the PR does.

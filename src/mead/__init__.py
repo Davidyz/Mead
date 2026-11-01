@@ -1,6 +1,7 @@
 import asyncio
 import sys
 
+from .node_manager import NodeManager
 from .skills import SkillManager
 from .utils import parse_args
 
@@ -8,6 +9,7 @@ from .utils import parse_args
 async def main_coro() -> None:
     cli_args = parse_args()
 
+    _node_manager = NodeManager(cli_args)
     _skill_manager = SkillManager(cli_args.skill_dir)
 
     # TODO: Upload the skills

@@ -2,7 +2,8 @@
 
 This performs the full local devnet preparation:
 
-1. Deploy the repository's Lyquid with ``shaker deploy Cargo.toml -o json``.
+1. Deploy the repository's Lyquid with ``shaker deploy Cargo.toml -o json``,
+   unless an existing Lyquid ID is supplied with ``--lyquid-id``.
 2. Discover the four node containers with ``docker container ls``.
 3. Read each node's ID from its container logs.
 4. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
@@ -15,6 +16,7 @@ format only supports text resources.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import random
@@ -300,9 +302,25 @@ def print_deployed_skills(nodes: list[Node], lyquid_id: str) -> None:
             print(f"  - {skill.name}")
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Deploy Mead and prepare per-node skill fixtures."
+    )
+    parser.add_argument(
+        "--lyquid-id",
+        help="Use an existing Lyquid ID instead of running `shaker deploy`.",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
-    lyquid_id = deploy_lyquid()
-    print(f"Deployed Lyquid: {lyquid_id}")
+    args = parse_args()
+    if args.lyquid_id:
+        lyquid_id = args.lyquid_id
+        print(f"Using Lyquid: {lyquid_id}")
+    else:
+        lyquid_id = deploy_lyquid()
+        print(f"Deployed Lyquid: {lyquid_id}")
 
     containers = discover_node_containers()
     nodes = [

@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+from rich import print
 
 from mead.node_manager import NodeManager, SkillSummary
 from mead.skills import Skill
@@ -357,7 +358,7 @@ def print_deployed_skills(
 ) -> None:
     print("\nDeployed skills by node:")
     for node in nodes:
-        print(f"node{node.index} ({node.node_id}):")
+        print(f"node{node.index} ('{node.node_id}'):")
         for skill in deployed_skills[node.index]:
             print(f"  - {skill.name}")
 
@@ -377,10 +378,10 @@ def main() -> None:
     args = parse_args()
     if args.lyquid_id:
         lyquid_id = args.lyquid_id
-        print(f"Using Lyquid: {lyquid_id}")
+        print(f"Using Lyquid: '{lyquid_id}'")
     else:
         lyquid_id = deploy_lyquid()
-        print(f"Deployed Lyquid: {lyquid_id}")
+        print(f"Deployed Lyquid: '{lyquid_id}'")
 
     containers = discover_node_containers()
     nodes = [

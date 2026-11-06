@@ -36,6 +36,15 @@ To reuse an existing deployment instead of deploying again, pass its Lyquid ID:
 make prepare-nodes LYQUID_ID=Lyquid-...
 ```
 
+The script publishes the built Lyquid to the devnet's OCI registry so every
+node can pull the image. The default reference is
+`http://127.0.0.1:8000/lyquids:mead`; override it with the `LYQUID_REFERENCE`
+environment variable if needed:
+
+```bash
+LYQUID_REFERENCE=http://127.0.0.1:8000/lyquids:my-tag make prepare-nodes
+```
+
 The script can also be run directly with `uv run python scripts/prep_nodes.py`.
 
 # Creating a new Commit

@@ -285,13 +285,12 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         return Ok(());
     }
 
-    let query_text = ctx
+    let query = ctx
         .network
         .query_registry
         .get(&query_id)
-        .map(|query| query.query_text.clone())
         .ok_or_else(|| invalid_input("query is not registered"))?;
-    if query_text.is_empty() {
+    if query.query_text.is_empty() {
         return Err(invalid_input("query text is not available on-chain"));
     }
 
@@ -299,10 +298,7 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         "mead: announcing search {query_id} to {} peers",
         expected_nodes.len()
     );
-    let input = encode_by_fields!(
-        query_id: HashBytes = HashBytes::from(query_id),
-        query_text: String = query_text
-    );
+    let input = encode_by_fields!(query_id: HashBytes = HashBytes::from(query_id));
     lyquor_api::universal_procedural_call(
         ctx.lyquid_id,
         None,
@@ -329,7 +325,7 @@ fn search_request(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<NodeID>> {
 
 // UPC request step: runs on each selected peer and schedules local processing.
 #[method::instance(upc(request))]
-fn search_request(ctx: &mut _, query_id: HashBytes, query_text: String) -> LyquidResult<bool> {
+fn search_request(ctx: &mut _, query_id: HashBytes) -> LyquidResult<bool> {
     let query_id = Hash::from(query_id);
 
     let query = ctx
@@ -339,7 +335,9 @@ fn search_request(ctx: &mut _, query_id: HashBytes, query_text: String) -> Lyqui
         .cloned()
         .ok_or_else(|| invalid_input("query is not registered"))?;
 
-    if blake3::hash(query_text.as_bytes()) != query.query_digest {
+    if query.query_text.is_empty()
+        || blake3::hash(query.query_text.as_bytes()) != query.query_digest
+    {
         return Err(invalid_input(
             "query text does not match the on-chain digest",
         ));

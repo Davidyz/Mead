@@ -34,9 +34,6 @@ state! {
     network query_registry: QueryRegistry = QueryRegistry::default();
     network result_registry: ResultRegistry = ResultRegistry::default();
     network node_registry: NodeRegistry = NodeRegistry::default();
-    // Query text is stored on-chain so every hosting node can run the search.
-    network search_texts: HashMap<Hash, String> = new_hashmap();
-
     // Node-local notifications
     instance pending_searches: Vec<Hash> = Vec::new();
     instance ready_queries: Vec<Hash> = Vec::new();
@@ -117,7 +114,6 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
     plan_search_query(
         &mut *network.query_registry,
         &*network.node_registry,
-        &mut *network.search_texts,
         query,
         initiator,
     )
@@ -130,17 +126,15 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
 fn plan_search_query(
     query_registry: &mut QueryRegistry,
     node_registry: &NodeRegistry,
-    search_texts: &mut HashMap<Hash, String>,
     query: SearchQuery,
     initiator: NodeID,
 ) -> LyquidResult<()> {
     let query_id = query.query_id;
 
-    if !query.query_text.is_empty() {
-        if blake3::hash(query.query_text.as_bytes()) != query.query_digest {
-            return Err(invalid_input("query text does not match the query digest"));
-        }
-        search_texts.insert(query_id, query.query_text.clone());
+    if !query.query_text.is_empty()
+        && blake3::hash(query.query_text.as_bytes()) != query.query_digest
+    {
+        return Err(invalid_input("query text does not match the query digest"));
     }
 
     query_registry.insert(query)?;
@@ -293,10 +287,13 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
 
     let query_text = ctx
         .network
-        .search_texts
+        .query_registry
         .get(&query_id)
-        .cloned()
-        .ok_or_else(|| invalid_input("query text is not available on-chain"))?;
+        .map(|query| query.query_text.clone())
+        .ok_or_else(|| invalid_input("query is not registered"))?;
+    if query_text.is_empty() {
+        return Err(invalid_input("query text is not available on-chain"));
+    }
 
     lyquid::println!(
         "mead: announcing search {query_id} to {} peers",
@@ -384,9 +381,10 @@ fn process_assigned_search_impl(
     let Some(query) = ctx.network.query_registry.get(&query_id).cloned() else {
         return Ok(());
     };
-    let Some(query_text) = ctx.network.search_texts.get(&query_id).cloned() else {
+    let query_text = query.query_text.clone();
+    if query_text.is_empty() {
         return Ok(());
-    };
+    }
     if blake3::hash(query_text.as_bytes()) != query.query_digest {
         return Err(invalid_input(
             "query text does not match the on-chain digest",
@@ -477,7 +475,6 @@ fn coordinate_search(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
     plan_search_query(
         &mut *network.query_registry,
         &*network.node_registry,
-        &mut *network.search_texts,
         query,
         initiator,
     )

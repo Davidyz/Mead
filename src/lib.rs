@@ -52,80 +52,141 @@ state! {
     instance skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
 }
 
-// Registers the caller's node identity so it can receive search notifications.
-#[method::network]
-fn register_node(ctx: &mut _) -> LyquidResult<()> {
-    let node = lyquor_api::get_ed25519_by_address(ctx.caller)
-        .ok()
-        .flatten()
-        .ok_or_else(|| invalid_input("caller has no ed25519 identity"))?;
-
-    ctx.network.node_registry.register(node)?;
-    Ok(())
-}
-
-// Registers a node identity supplied by tooling or a deployment client.
+// Stages the initial search oracle committee at deployment or code upgrade.
 //
-// The bartender mapping must bind `address` to `node`, so a caller cannot
-// register an arbitrary identity that does not belong to that address.
+// The constructor can only stage the committee; a node-side instance call must
+// advance and finalize the first epoch before the oracle can certify calls. The
+// staging operation is idempotent and is ignored once an epoch is active, so
+// re-running it during an upgrade is safe.
+// The eth export is required for `shaker deploy -i` to expose the constructor
+// ABI and deliver the ABI-encoded committee and threshold.
 #[method::network(export = eth)]
-fn register_node_address(ctx: &mut _, node: NodeID, address: Address) -> LyquidResult<()> {
-    if address == Address::ZERO {
-        return Err(invalid_input("node address must not be zero"));
+fn constructor(ctx: &mut _, committee: Vec<NodeID>, threshold: u16) {
+    if let Ok(seq_id) = lyquor_api::sequence_backend_id() {
+        let target = OracleTarget {
+            seq_id,
+            target: OracleServiceTarget::LVM(ctx.lyquid_id),
+        };
+        let oracle = ctx.network.search.clone();
+        let _ = oracle.initialize(&mut ctx, target, committee, threshold);
     }
+}
 
-    let resolved = lyquor_api::get_ed25519_by_address(address).ok().flatten();
-    if resolved != Some(node) {
-        return Err(invalid_input(
-            "address is not bound to the supplied node identity",
-        ));
-    }
-
+// Registers a node identity through a certified oracle call.
+//
+// The node's local `/nodes/register` endpoint obtains a certificate for this
+// call using its own `ctx.node_id`; the committee attests the request and no
+// address-to-key mapping is involved. Registration is idempotent.
+#[method::network(group = oracle::certified::search)]
+fn register_node(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
     ctx.network.node_registry.register(node)?;
     Ok(())
 }
 
-// Removes the caller's own node identity from the registry.
+// Removes a node identity through a certified oracle call.
 //
-// The identity is derived from the caller, so a node can only unregister itself.
-#[method::network]
-fn unregister_node(ctx: &mut _) -> LyquidResult<()> {
-    let node = lyquor_api::get_ed25519_by_address(ctx.caller)
-        .ok()
-        .flatten()
-        .ok_or_else(|| invalid_input("caller has no ed25519 identity"))?;
-
+// The node's local `/nodes/unregister` endpoint supplies its own `ctx.node_id`.
+#[method::network(group = oracle::certified::search)]
+fn unregister_node(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
     if !ctx.network.node_registry.unregister(node) {
         return Err(invalid_input("node is not registered"));
     }
     Ok(())
 }
 
+// Submits a certified node-registry change from this node's local instance.
+//
+// The call origin is the Lyquid's own address, not the node identity: the node
+// identity travels in the signed input and the certificate proves committee
+// approval of that exact call.
+fn submit_node_registry_change(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    method: &str,
+    node: NodeID,
+) -> LyquidResult<http::Response> {
+    let target = OracleTarget {
+        seq_id: lyquor_api::sequence_backend_id()?,
+        target: OracleServiceTarget::LVM(ctx.lyquid_id),
+    };
+    let origin = Address::from(ctx.lyquid_id);
+    let oracle = ctx.network.search.clone();
+    let call = oracle.certify(
+        ctx,
+        CertifiedCallParams {
+            origin,
+            method: method.to_owned(),
+            input: encode_by_fields!(node: NodeID = node).into(),
+            target,
+        },
+        Bytes::new(),
+        None,
+        Some(UPC_ANNOUNCE_TIMEOUT_MS),
+    )?;
+
+    let Some(call) = call else {
+        return Ok(http_json_response(
+            503,
+            &json_error("node registration certification is unavailable"),
+        ));
+    };
+
+    match submit_certified_call!(call) {
+        Ok(_) => {
+            let body = serde_json::json!({
+                "status": "submitted",
+                "method": method,
+                "node_id": node.to_string(),
+            })
+            .to_string();
+            Ok(http_json_response(202, &body))
+        }
+        Err(error) => Ok(http_json_response(
+            502,
+            &json_error(&format!("failed to submit certified node change: {error}")),
+        )),
+    }
+}
+
+// Registers this node in Mead's node registry.
+//
+// The endpoint is instance-only so it can use the node's own `node_id`. It
+// requires an active search oracle (the constructor stages the committee and
+// the setup script activates it). Repeated calls are safe.
+#[method::instance(export = http, method = "POST", path_prefix = "/nodes/register")]
+fn register_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
+    let node = ctx.node_id;
+    submit_node_registry_change(&mut ctx, "register_node", node)
+}
+
+// Removes this node from Mead's node registry.
+#[method::instance(export = http, method = "POST", path_prefix = "/nodes/unregister")]
+fn unregister_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
+    let node = ctx.node_id;
+    submit_node_registry_change(&mut ctx, "unregister_node", node)
+}
+
+// Lists the node identities currently registered on-chain.
+#[method::instance(export = http, method = "GET", path_prefix = "/nodes/list")]
+fn list_registered_nodes(ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
+    let mut nodes: Vec<NodeID> = ctx.network.node_registry.nodes().iter().copied().collect();
+    nodes.sort_by(|left, right| left.0.cmp(&right.0));
+    let nodes: Vec<String> = nodes.into_iter().map(|node| node.to_string()).collect();
+    let body = serde_json::json!({ "nodes": nodes }).to_string();
+    Ok(http_json_response(200, &body))
+}
+
 // Registers a query, snapshots the peers expected to answer it, and announces it.
 //
-// The signature must be valid and the caller must be authorized to submit on
-// behalf of the declared sender, otherwise any node could post a query under a
-// forged address and have it accepted.
+// The query carries its sender's node identity and a signature by that node's
+// Ed25519 key. A valid signature is the authorization to post the query.
 #[method::network]
 fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
-    verify::ensure_authorized(ctx.caller, query.sender)?;
-
     if !verify::verify_signed(&query) {
         return Err(invalid_input("query signature is invalid"));
     }
 
-    let initiator = lyquor_api::get_ed25519_by_address(query.sender)
-        .ok()
-        .flatten()
-        .ok_or_else(|| invalid_input("query sender has no ed25519 identity"))?;
-
     let network = &mut *ctx.network;
-    plan_search_query(
-        &mut *network.query_registry,
-        &*network.node_registry,
-        query,
-        initiator,
-    )
+    plan_search_query(&mut *network.query_registry, &*network.node_registry, query)
 }
 
 // Registers a query, snapshots the expected peers, and announces it.
@@ -136,9 +197,9 @@ fn plan_search_query(
     query_registry: &mut QueryRegistry,
     node_registry: &NodeRegistry,
     query: SearchQuery,
-    initiator: NodeID,
 ) -> LyquidResult<()> {
     let query_id = query.query_id;
+    let initiator = query.sender;
 
     if !query.query_text.is_empty()
         && blake3::hash(query.query_text.as_bytes()) != query.query_digest
@@ -149,6 +210,8 @@ fn plan_search_query(
     query_registry.insert(query)?;
 
     // Snapshot the peers at registration time, excluding the initiating node.
+    // The same node identities are both the notification targets and the
+    // responders whose results the query waits for.
     let mut expected_nodes: Vec<NodeID> = node_registry
         .nodes()
         .iter()
@@ -157,15 +220,6 @@ fn plan_search_query(
         .collect();
     expected_nodes.sort();
 
-    let mut expected_responders: HashSet<Address> = new_hashset();
-    expected_nodes.retain(|node| match lyquor_api::get_address_by_ed25519(node.0) {
-        Ok(Some(address)) => {
-            expected_responders.insert(address);
-            true
-        }
-        _ => false,
-    });
-
     let deadline = ChainPos::new(
         lyquor_api::chain_pos()?
             .block()
@@ -173,13 +227,7 @@ fn plan_search_query(
         0,
     );
 
-    query_registry.plan(
-        query_id,
-        initiator,
-        expected_nodes,
-        expected_responders,
-        deadline,
-    )?;
+    query_registry.plan(query_id, initiator, expected_nodes, deadline)?;
 
     trigger!(
         announce_search(query_id: HashBytes = HashBytes::from(query_id)),
@@ -191,8 +239,6 @@ fn plan_search_query(
 // Validates and stores a peer result, then records the peer as a responder.
 #[method::network]
 fn submit_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
-    verify::ensure_authorized(ctx.caller, result.sender)?;
-
     if !verify::verify_signed(&result) {
         return Err(invalid_input("result signature is invalid"));
     }
@@ -323,7 +369,10 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         reply.reply.replies.len()
     );
     for peer_reply in reply.reply.replies {
-        submit_peer_result_impl(&mut ctx, peer_reply)?;
+        let sender = peer_reply.result.sender;
+        if let Err(error) = submit_peer_result_impl(&mut ctx, peer_reply) {
+            lyquid::println!("mead: failed to submit result for {query_id} from {sender}: {error}");
+        }
     }
 
     Ok(())
@@ -375,10 +424,7 @@ fn search_request(ctx: &mut _, query: SearchQuery) -> LyquidResult<SearchReply> 
         matches.len()
     );
     let timestamp = lyquor_api::systime()? / 1000;
-    let sender = lyquor_api::get_address_by_ed25519(ctx.node_id.0)
-        .ok()
-        .flatten()
-        .ok_or_else(|| invalid_input("node has no on-chain address"))?;
+    let sender = ctx.node_id;
 
     let mut result = SearchResult::new(query_id, matches, timestamp, sender)?;
     let signature = lyquor_api::sign(Bytes::from(result.signing_payload()), Cipher::Ed25519)?;
@@ -493,16 +539,16 @@ fn submit_peer_result_impl(
         }
     }
 
-    let sender = result.sender;
     let target = OracleTarget {
         seq_id: lyquor_api::sequence_backend_id()?,
         target: OracleServiceTarget::LVM(ctx.lyquid_id),
     };
+    let origin = Address::from(ctx.lyquid_id);
     let oracle = ctx.network.search.clone();
     let call = oracle.certify(
         ctx,
         CertifiedCallParams {
-            origin: sender,
+            origin,
             method: "coordinate_result".into(),
             input: encode_by_fields!(result: SearchResult = result).into(),
             target,
@@ -522,43 +568,23 @@ fn submit_peer_result_impl(
 // Accepts a certified search initiation and registers the query on-chain.
 //
 // The certificate proves that the search oracle committee approved this exact
-// query for this sender. The query keeps its own signature so peers can verify
-// it independently, and the certificate origin is bound to the query sender so
-// a valid certificate cannot be replayed for a different sender address.
+// query, while the query keeps its own NodeID signature so peers can verify it
+// independently. The certificate origin is the calling Lyquid, not the search
+// identity, so it is intentionally not compared with `query.sender`.
 #[method::network(group = oracle::certified::search)]
 fn coordinate_search(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
-    if query.sender != ctx.origin {
-        return Err(invalid_input(
-            "query sender does not match the certificate origin",
-        ));
-    }
     if !verify::verify_signed(&query) {
         return Err(invalid_input("query signature is invalid"));
     }
 
-    let initiator = lyquor_api::get_ed25519_by_address(query.sender)
-        .ok()
-        .flatten()
-        .ok_or_else(|| invalid_input("query sender has no ed25519 identity"))?;
-
     lyquid::println!("mead: coordinate_search {}", query.query_id);
     let network = &mut *ctx.network;
-    plan_search_query(
-        &mut *network.query_registry,
-        &*network.node_registry,
-        query,
-        initiator,
-    )
+    plan_search_query(&mut *network.query_registry, &*network.node_registry, query)
 }
 
 // Accepts a certified peer result and records it on-chain.
 #[method::network(group = oracle::certified::search)]
 fn coordinate_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
-    if result.sender != ctx.origin {
-        return Err(invalid_input(
-            "result sender does not match the certificate origin",
-        ));
-    }
     if !verify::verify_signed(&result) {
         return Err(invalid_input("result signature is invalid"));
     }
@@ -607,19 +633,19 @@ fn validate(
             if blake3::hash(input.query.query_text.as_bytes()) != input.query.query_digest {
                 return Ok(false);
             }
-            if input.query.sender != params.origin {
-                return Ok(false);
-            }
             Ok(verify::verify_signed(&input.query))
         }
         "coordinate_result" => {
             let Some(input) = decode_by_fields!(&params.input, result: SearchResult) else {
                 return Ok(false);
             };
-            if input.result.sender != params.origin {
-                return Ok(false);
-            }
             Ok(verify::verify_signed(&input.result))
+        }
+        "register_node" | "unregister_node" => {
+            let Some(input) = decode_by_fields!(&params.input, node: NodeID) else {
+                return Ok(false);
+            };
+            Ok(input.node.0 != [0u8; 32])
         }
         _ => Ok(false),
     }
@@ -682,22 +708,22 @@ fn get_query(ctx: &_, query_id: HashBytes) -> LyquidResult<Option<SearchQuery>> 
 
 // Returns a peer's result for a query.
 #[method::network]
-fn get_result(ctx: &_, query_id: HashBytes, sender: Address) -> LyquidResult<Option<SearchResult>> {
+fn get_result(ctx: &_, query_id: HashBytes, sender: NodeID) -> LyquidResult<Option<SearchResult>> {
     let query_id = Hash::from(query_id);
     Ok(ctx.network.result_registry.get(&query_id, sender).cloned())
 }
 
 // Returns the sorted responders registered for a query.
 #[method::network]
-fn get_responders(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<Address>> {
+fn get_responders(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<NodeID>> {
     let query_id = Hash::from(query_id);
-    let mut responders: Vec<Address> = ctx
+    let mut responders: Vec<NodeID> = ctx
         .network
         .query_registry
         .responders(&query_id)
-        .map(|addresses| addresses.iter().copied().collect())
+        .map(|nodes| nodes.iter().copied().collect())
         .unwrap_or_default();
-    responders.sort_by(|left, right| left.as_slice().cmp(right.as_slice()));
+    responders.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(responders)
 }
 
@@ -725,15 +751,7 @@ fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Re
         return Ok(http_json_response(400, &json_error(&error.to_string())));
     }
 
-    let sender = match lyquor_api::get_address_by_ed25519(ctx.node_id.0) {
-        Ok(Some(sender)) => sender,
-        _ => {
-            return Ok(http_json_response(
-                500,
-                &json_error("node has no on-chain address"),
-            ));
-        }
-    };
+    let sender = ctx.node_id;
 
     let query_text = request.query;
     let timestamp = lyquor_api::systime()? / 1000;
@@ -751,11 +769,12 @@ fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Re
         seq_id: lyquor_api::sequence_backend_id()?,
         target: OracleServiceTarget::LVM(ctx.lyquid_id),
     };
+    let origin = Address::from(ctx.lyquid_id);
     let oracle = ctx.network.search.clone();
     let call = match oracle.certify(
         &mut ctx,
         CertifiedCallParams {
-            origin: sender,
+            origin,
             method: "coordinate_search".into(),
             input: encode_by_fields!(query: SearchQuery = query).into(),
             target,
@@ -868,10 +887,7 @@ fn local_search_result(
 
     let matches = bm25::search(&query.query_text, query.params.k as usize, &skills);
     let timestamp = lyquor_api::systime()? / 1000;
-    let sender = lyquor_api::get_address_by_ed25519(ctx.node_id.0)
-        .ok()
-        .flatten()
-        .ok_or_else(|| invalid_input("node has no on-chain address"))?;
+    let sender = ctx.node_id;
 
     let mut result = SearchResult::new(query.query_id, matches, timestamp, sender)?;
     let signature = lyquor_api::sign(Bytes::from(result.signing_payload()), Cipher::Ed25519)?;

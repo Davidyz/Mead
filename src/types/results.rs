@@ -25,11 +25,11 @@ pub type Bm25Score = i64;
 
 /// Registry that stores all submitted search results.
 ///
-/// Maps `(query_id, submitter_address)` to the full `SearchResult`, ensuring
+/// Maps `(query_id, submitting_node)` to the full `SearchResult`, ensuring
 /// each peer can only submit one result per query.
 #[derive(Debug, Clone)]
 pub struct ResultRegistry {
-    results: HashMap<(Hash, Address), SearchResult>,
+    results: HashMap<(Hash, NodeID), SearchResult>,
 }
 
 impl Default for ResultRegistry {
@@ -59,16 +59,16 @@ impl ResultRegistry {
     }
 
     /// Returns a result for the given query and peer.
-    pub fn get(&self, query_id: &Hash, sender: Address) -> Option<&SearchResult> {
+    pub fn get(&self, query_id: &Hash, sender: NodeID) -> Option<&SearchResult> {
         self.results.get(&(*query_id, sender))
     }
 
     /// Returns true if the peer already submitted a result for this query.
-    pub fn contains(&self, query_id: &Hash, sender: Address) -> bool {
+    pub fn contains(&self, query_id: &Hash, sender: NodeID) -> bool {
         self.results.contains_key(&(*query_id, sender))
     }
 
-    /// Returns all results submitted for a query, ordered by submitter address.
+    /// Returns all results submitted for a query, ordered by submitter node bytes.
     pub fn for_query(&self, query_id: &Hash) -> Vec<&SearchResult> {
         let mut results: Vec<&SearchResult> = self
             .results
@@ -76,7 +76,7 @@ impl ResultRegistry {
             .filter(|((id, _), _)| id == query_id)
             .map(|(_, result)| result)
             .collect();
-        results.sort_by(|left, right| left.sender.as_slice().cmp(right.sender.as_slice()));
+        results.sort_by(|left, right| left.sender.0.cmp(&right.sender.0));
         results
     }
 
@@ -160,8 +160,8 @@ pub struct SearchResult {
     pub merkle_root: Hash,
     /// UTC timestamp of when the result was submitted, in seconds since the Unix epoch.
     pub timestamp: u64,
-    /// Address of the submitting peer node `Xᵢ`
-    pub sender: Address,
+    /// Node identity of the submitting peer node `Xᵢ`
+    pub sender: NodeID,
     /// Signature over [`crate::types::CanonicalBytes::signing_payload`] by `Xᵢ`, if present.
     signature: Option<Vec<u8>>,
 }
@@ -223,13 +223,13 @@ impl crate::types::CanonicalBytes for SearchResult {
         bytes.extend_from_slice(self.merkle_root.as_bytes());
         bytes.extend_from_slice(&(self.matches.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&self.timestamp.to_le_bytes());
-        bytes.extend_from_slice(self.sender.as_slice());
+        bytes.extend_from_slice(&self.sender.0);
         bytes
     }
 }
 
 impl crate::types::Signed for SearchResult {
-    fn sender(&self) -> Address {
+    fn sender(&self) -> NodeID {
         self.sender
     }
 
@@ -247,7 +247,7 @@ impl SearchResult {
         query_id: Hash,
         mut matches: Vec<SkillMatch>,
         timestamp: u64,
-        sender: Address,
+        sender: NodeID,
     ) -> LyquidResult<Self> {
         canonicalize_matches(&mut matches)?;
 
@@ -328,14 +328,18 @@ mod tests {
         }
     }
 
+    fn node(byte: u8) -> NodeID {
+        NodeID::new([byte; 32])
+    }
+
     fn query_with_k(k: u64) -> SearchQuery {
-        SearchQuery::new(b"query", QueryParams { k }, 1, Address::ZERO).unwrap()
+        SearchQuery::new(b"query", QueryParams { k }, 1, node(9)).unwrap()
     }
 
     #[lyquid_test::test]
     fn accepts_empty_match_set() {
         let query = query_with_k(10);
-        let result = SearchResult::new(query.query_id, Vec::new(), 1, Address::ZERO).unwrap();
+        let result = SearchResult::new(query.query_id, Vec::new(), 1, node(9)).unwrap();
 
         assert!(result.matches.is_empty());
         assert!(result.validate_against(&query).is_ok());
@@ -344,13 +348,8 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_too_many_matches_for_query() {
         let query = query_with_k(1);
-        let result = SearchResult::new(
-            query.query_id,
-            vec![skill(1, 1), skill(2, 0)],
-            1,
-            Address::ZERO,
-        )
-        .unwrap();
+        let result =
+            SearchResult::new(query.query_id, vec![skill(1, 1), skill(2, 0)], 1, node(9)).unwrap();
 
         let mut registry = ResultRegistry::default();
         assert!(registry.insert(&query, result).is_err());
@@ -359,12 +358,7 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_duplicate_skill_digests() {
         let query = query_with_k(10);
-        let result = SearchResult::new(
-            query.query_id,
-            vec![skill(1, 1), skill(1, 0)],
-            1,
-            Address::ZERO,
-        );
+        let result = SearchResult::new(query.query_id, vec![skill(1, 1), skill(1, 0)], 1, node(9));
 
         assert!(result.is_err());
     }
@@ -372,7 +366,7 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_negative_scores() {
         let query = query_with_k(10);
-        let result = SearchResult::new(query.query_id, vec![skill(1, -1)], 1, Address::ZERO);
+        let result = SearchResult::new(query.query_id, vec![skill(1, -1)], 1, node(9));
 
         assert!(result.is_err());
     }
@@ -380,20 +374,8 @@ mod tests {
     #[lyquid_test::test]
     fn returns_results_for_a_query_in_sender_order() {
         let query = query_with_k(10);
-        let first = SearchResult::new(
-            query.query_id,
-            vec![skill(1, 1)],
-            1,
-            Address::from([1u8; 20]),
-        )
-        .unwrap();
-        let second = SearchResult::new(
-            query.query_id,
-            vec![skill(2, 2)],
-            1,
-            Address::from([2u8; 20]),
-        )
-        .unwrap();
+        let first = SearchResult::new(query.query_id, vec![skill(1, 1)], 1, node(1)).unwrap();
+        let second = SearchResult::new(query.query_id, vec![skill(2, 2)], 1, node(2)).unwrap();
 
         let mut registry = ResultRegistry::default();
         registry.insert(&query, second).unwrap();
@@ -402,15 +384,14 @@ mod tests {
         assert_eq!(registry.count_for_query(&query.query_id), 2);
         let results = registry.for_query(&query.query_id);
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].sender, Address::from([1u8; 20]));
-        assert_eq!(results[1].sender, Address::from([2u8; 20]));
+        assert_eq!(results[0].sender, node(1));
+        assert_eq!(results[1].sender, node(2));
     }
 
     #[lyquid_test::test]
     fn accepts_zero_score() {
         let query = query_with_k(10);
-        let result =
-            SearchResult::new(query.query_id, vec![skill(1, 0)], 1, Address::ZERO).unwrap();
+        let result = SearchResult::new(query.query_id, vec![skill(1, 0)], 1, node(9)).unwrap();
 
         assert!(result.validate_against(&query).is_ok());
     }

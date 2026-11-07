@@ -117,7 +117,7 @@ fn rejects_missing_empty_and_malformed_search_requests() {
 #[lyquid_test::test]
 fn query_text_round_trips_through_certified_input_encoding() {
     let query =
-        SearchQuery::new(b"skill", QueryParams { k: 5 }, 1, Address::from([1u8; 20])).unwrap();
+        SearchQuery::new(b"skill", QueryParams { k: 5 }, 1, NodeID::new([1u8; 32])).unwrap();
     let encoded = encode_by_fields!(query: SearchQuery = query.clone());
     let decoded = decode_by_fields!(&encoded, query: SearchQuery).unwrap();
 
@@ -227,7 +227,7 @@ fn aggregate_matches_keeps_best_score_and_sorts() {
             },
         ],
         1,
-        Address::from([1u8; 20]),
+        NodeID::new([1u8; 32]),
     )
     .unwrap();
     let second = SearchResult::new(
@@ -243,7 +243,7 @@ fn aggregate_matches_keeps_best_score_and_sorts() {
             },
         ],
         2,
-        Address::from([2u8; 20]),
+        NodeID::new([2u8; 32]),
     )
     .unwrap();
 

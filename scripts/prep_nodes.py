@@ -2,18 +2,23 @@
 
 This performs the full local devnet preparation:
 
-1. Publish and deploy the repository's Lyquid with
-   ``shaker deploy Cargo.toml --reference <ref> -o json``, unless an existing
-   Lyquid ID is supplied with ``--lyquid-id``. Publishing to the devnet's OCI
-   registry lets the other nodes pull the image; without it only the node that
-   received the deploy can host the Lyquid.
-2. Discover the four node containers with ``docker container ls``.
-3. Read each node's ID from its container logs.
-4. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
+1. Discover the four node containers with ``docker container ls`` and read each
+   node's ID from its container logs.
+2. Publish and deploy the repository's Lyquid with
+   ``shaker deploy Cargo.toml --reference <ref> -i <constructor> -o json``,
+   unless an existing Lyquid ID is supplied with ``--lyquid-id``. The
+   constructor input ABI-encodes the node IDs as the search oracle committee and
+   the configured threshold. Publishing to the devnet's OCI registry lets the
+   other nodes pull the image; without it only the node that received the deploy
+   can host the Lyquid.
+3. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
    each node directory.
-5. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
+4. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
    ports, and selected fixture skill names for integration tests.
-6. Upload each node's fixture directory with ``uv run mead --upload-only``.
+5. Upload each node's fixture directory with ``uv run mead --upload-only``.
+
+The constructor only stages the oracle committee. Activate the first epoch and
+trigger node self-registration with ``scripts/setup_search.sh`` after deployment.
 
 Skills containing non-UTF-8 resources are excluded because the canonical skill
 format only supports text resources.
@@ -22,6 +27,7 @@ format only supports text resources.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -62,6 +68,9 @@ NODE_ID_RE = re.compile(
 )
 NODE_PORT_RE = re.compile(r":(?P<port>\d+)->10087/tcp")
 
+DEFAULT_ORACLE_THRESHOLD = 2
+NODE_ID_BYTES = 32
+
 
 @dataclass(frozen=True)
 class Node:
@@ -69,6 +78,36 @@ class Node:
     container: str
     node_id: str
     port: int
+
+
+def node_id_public_key(node_id: str) -> bytes:
+    """Decode a `Node-...` identifier to its 32-byte Ed25519 public key."""
+    label = node_id.removeprefix("Node-")
+    padding = "=" * ((8 - len(label) % 8) % 8)
+    try:
+        decoded = base64.b32decode(label.upper() + padding, casefold=True)
+    except Exception as error:
+        raise RuntimeError(f"invalid node ID {node_id!r}: {error}") from error
+    if len(decoded) < NODE_ID_BYTES:
+        raise RuntimeError(f"invalid node ID {node_id!r}: too short")
+    return decoded[:NODE_ID_BYTES]
+
+
+def encode_constructor_input(committee: list[str], threshold: int) -> str:
+    """ABI-encode `(bytes32[] committee, uint16 threshold)` for `shaker deploy -i`."""
+    if not committee:
+        raise ValueError("oracle committee must not be empty")
+    if not 0 < threshold <= len(committee):
+        raise ValueError(
+            f"threshold {threshold} must be between 1 and {len(committee)}"
+        )
+
+    keys = [node_id_public_key(node_id) for node_id in committee]
+    # Parameter head: offset to the dynamic array, then the uint16 threshold.
+    head = (64).to_bytes(32, "big") + threshold.to_bytes(32, "big")
+    # Dynamic array tail: length followed by one 32-byte word per element.
+    tail = len(keys).to_bytes(32, "big") + b"".join(keys)
+    return "0x" + (head + tail).hex()
 
 
 def run(
@@ -108,11 +147,27 @@ def parse_json_output(output: str) -> dict[str, object]:
     raise RuntimeError("command did not produce a JSON object")
 
 
-def deploy_lyquid() -> str:
+def deploy_lyquid(nodes: list[Node], threshold: int) -> str:
     reference = os.environ.get("LYQUID_REFERENCE", DEFAULT_LYQUID_REFERENCE)
+    committee = [node.node_id for node in sorted(nodes, key=lambda node: node.index)]
+    constructor_input = encode_constructor_input(committee, threshold)
     print(f"Deploying Cargo.toml to {reference}...")
+    print(f"Oracle committee ({threshold} of {len(committee)}):")
+    for node in sorted(nodes, key=lambda node: node.index):
+        print(f"  - {node.node_id}")
+    print(f"Constructor input: {constructor_input}")
     process = run(
-        ["shaker", "deploy", "Cargo.toml", "--reference", reference, "-o", "json"],
+        [
+            "shaker",
+            "deploy",
+            "Cargo.toml",
+            "--reference",
+            reference,
+            "-i",
+            constructor_input,
+            "-o",
+            "json",
+        ],
         capture_output=True,
     )
     if process.stderr:
@@ -371,23 +426,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--lyquid-id",
         help="Use an existing Lyquid ID instead of running `shaker deploy`.",
     )
+    parser.add_argument(
+        "--threshold",
+        type=int,
+        default=DEFAULT_ORACLE_THRESHOLD,
+        help=(
+            "Search oracle threshold passed to the constructor during deployment "
+            f"(default: {DEFAULT_ORACLE_THRESHOLD})."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     args = parse_args()
-    if args.lyquid_id:
-        lyquid_id = args.lyquid_id
-        print(f"Using Lyquid: '{lyquid_id}'")
-    else:
-        lyquid_id = deploy_lyquid()
-        print(f"Deployed Lyquid: '{lyquid_id}'")
 
     containers = discover_node_containers()
     nodes = [
         node_from_container(index, *containers[index])
         for index in range(1, NODE_COUNT + 1)
     ]
+
+    if args.lyquid_id:
+        lyquid_id = args.lyquid_id
+        print(f"Using Lyquid: '{lyquid_id}'")
+    else:
+        lyquid_id = deploy_lyquid(nodes, args.threshold)
+        print(f"Deployed Lyquid: '{lyquid_id}'")
 
     skills = supported_skills()
     assignments = select_fixture_skills(skills)

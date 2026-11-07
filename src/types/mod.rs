@@ -11,7 +11,7 @@ pub use query::{
 };
 pub use results::{Bm25Score, MAX_MATCHES, ResultRegistry, SearchResult, SkillMatch};
 
-use lyquid::prelude::{Address, LyquidError};
+use lyquid::prelude::{LyquidError, NodeID};
 
 /// A trait for types that have a canonical byte representation for signing.
 ///
@@ -35,13 +35,13 @@ pub trait CanonicalBytes {
     }
 }
 
-/// A trait for types that carry a signature and a sender address.
+/// A trait for types that carry a signature and a sender node identity.
 ///
 /// Builds on [`CanonicalBytes`] to expose the fields needed for verification,
 /// allowing signing/verification logic to be written once generically.
 pub trait Signed: CanonicalBytes {
-    /// The address of the entity that signed this message.
-    fn sender(&self) -> Address;
+    /// The node identity of the entity that signed this message.
+    fn sender(&self) -> NodeID;
 
     /// The raw signature bytes, if the item has been signed.
     fn signature(&self) -> Option<&[u8]>;

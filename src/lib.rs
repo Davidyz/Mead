@@ -15,8 +15,8 @@ pub mod verify;
 use skill::{Skill, SkillError, SkillManager};
 use types::invalid_input;
 use types::{
-    CanonicalBytes, NodeRegistry, QueryParams, QueryRegistry, ResultRegistry,
-    SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery, SearchResult,
+    Bm25Score, CanonicalBytes, NodeRegistry, QueryParams, QueryRegistry, ResultRegistry,
+    SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery, SearchResult, SkillMatch,
 };
 
 /// Maximum time the initiating node waits for a UPC acknowledgement.
@@ -911,14 +911,57 @@ fn search_pending_response(
 }
 
 fn search_results_response(query_id: Hash, results: &[&SearchResult]) -> http::Response {
+    let verified: Vec<&SearchResult> = results
+        .iter()
+        .copied()
+        .filter(|result| verify::verify_signed(*result))
+        .collect();
+    let rejected_results = results.len() - verified.len();
+    let aggregated = aggregate_matches(&verified);
+
     let body = serde_json::json!({
         "status": "completed",
         "query_id": query_id.to_string(),
         "completed": true,
-        "results": results,
+        "verified_results": verified.len(),
+        "rejected_results": rejected_results,
+        "results": verified,
+        "aggregated": aggregated,
     })
     .to_string();
     http_json_response(200, &body)
+}
+
+// Deduplicates matches by skill digest, keeping the best score seen for each
+// skill, and orders them by descending score then digest.
+fn aggregate_matches(results: &[&SearchResult]) -> Vec<SkillMatch> {
+    let mut best_scores: HashMap<Hash, Bm25Score> = new_hashmap();
+    for result in results {
+        for skill_match in &result.matches {
+            let score = best_scores
+                .entry(skill_match.skill_digest)
+                .or_insert(skill_match.bm25_score);
+            if skill_match.bm25_score > *score {
+                *score = skill_match.bm25_score;
+            }
+        }
+    }
+
+    let mut aggregated: Vec<SkillMatch> = best_scores
+        .into_iter()
+        .map(|(skill_digest, bm25_score)| SkillMatch {
+            skill_digest,
+            bm25_score,
+        })
+        .collect();
+    aggregated.sort_by(|left, right| {
+        right.bm25_score.cmp(&left.bm25_score).then_with(|| {
+            left.skill_digest
+                .as_bytes()
+                .cmp(right.skill_digest.as_bytes())
+        })
+    });
+    aggregated
 }
 
 // Returns the name, description, and digest of every skill registered on this
@@ -1289,6 +1332,58 @@ mod tests {
         assert_eq!(response.status, 200);
         assert_eq!(body["completed"].as_bool(), Some(true));
         assert_eq!(body["results"].as_array().map(Vec::len), Some(0));
+        assert_eq!(body["aggregated"].as_array().map(Vec::len), Some(0));
+        assert_eq!(body["verified_results"].as_u64(), Some(0));
+        assert_eq!(body["rejected_results"].as_u64(), Some(0));
+    }
+
+    #[lyquid_test::test]
+    fn aggregate_matches_keeps_best_score_and_sorts() {
+        let query_id = blake3::hash(b"query");
+        let digest_a = blake3::hash(b"skill-a");
+        let digest_b = blake3::hash(b"skill-b");
+        let digest_c = blake3::hash(b"skill-c");
+        let first = SearchResult::new(
+            query_id,
+            vec![
+                SkillMatch {
+                    skill_digest: digest_a,
+                    bm25_score: 2,
+                },
+                SkillMatch {
+                    skill_digest: digest_c,
+                    bm25_score: 4,
+                },
+            ],
+            1,
+            Address::from([1u8; 20]),
+        )
+        .unwrap();
+        let second = SearchResult::new(
+            query_id,
+            vec![
+                SkillMatch {
+                    skill_digest: digest_a,
+                    bm25_score: 9,
+                },
+                SkillMatch {
+                    skill_digest: digest_b,
+                    bm25_score: 5,
+                },
+            ],
+            2,
+            Address::from([2u8; 20]),
+        )
+        .unwrap();
+
+        let aggregated = aggregate_matches(&[&first, &second]);
+        assert_eq!(aggregated.len(), 3);
+        assert_eq!(aggregated[0].skill_digest, digest_a);
+        assert_eq!(aggregated[0].bm25_score, 9);
+        assert_eq!(aggregated[1].skill_digest, digest_b);
+        assert_eq!(aggregated[1].bm25_score, 5);
+        assert_eq!(aggregated[2].skill_digest, digest_c);
+        assert_eq!(aggregated[2].bm25_score, 4);
     }
 
     #[lyquid_test::test]

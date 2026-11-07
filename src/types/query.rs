@@ -163,6 +163,16 @@ impl QueryRegistry {
             .is_some_and(|deadline| *deadline <= position)
     }
 
+    /// Returns the number of peers expected to process this query.
+    pub fn expected_peer_count(&self, query_id: &Hash) -> usize {
+        self.expected_nodes.get(query_id).map_or(0, Vec::len)
+    }
+
+    /// Returns the number of peers that have submitted a result for this query.
+    pub fn responder_count(&self, query_id: &Hash) -> usize {
+        self.responder_index.get(query_id).map_or(0, HashSet::len)
+    }
+
     /// Returns the number of registered queries.
     pub fn len(&self) -> usize {
         self.queries.len()
@@ -440,6 +450,37 @@ mod tests {
         assert!(!registry.is_complete(&query_id, ChainPos::new(99, 0)));
         assert!(registry.is_complete(&query_id, deadline));
         assert!(registry.is_complete(&query_id, ChainPos::new(101, 0)));
+    }
+
+    #[lyquid_test::test]
+    fn tracks_expected_peer_and_responder_counts() {
+        let (mut registry, query_id, initiator, peer) = registered_query();
+        let expected_node = NodeID::new([3u8; 32]);
+        let mut expected = new_hashset();
+        expected.insert(peer);
+
+        registry
+            .plan(
+                query_id,
+                initiator,
+                vec![expected_node],
+                expected,
+                ChainPos::new(100, 0),
+            )
+            .unwrap();
+
+        assert_eq!(registry.expected_peer_count(&query_id), 1);
+        assert_eq!(registry.responder_count(&query_id), 0);
+
+        registry.mark_responder(query_id, peer).unwrap();
+        assert_eq!(registry.responder_count(&query_id), 1);
+    }
+
+    #[lyquid_test::test]
+    fn unplanned_query_has_zero_peer_counts() {
+        let (registry, query_id, _, _) = registered_query();
+        assert_eq!(registry.expected_peer_count(&query_id), 0);
+        assert_eq!(registry.responder_count(&query_id), 0);
     }
 
     #[lyquid_test::test]

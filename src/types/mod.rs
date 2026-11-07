@@ -3,7 +3,7 @@ pub mod nodes;
 pub mod query;
 pub mod results;
 
-pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection};
+pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection, parse_hash};
 pub use nodes::NodeRegistry;
 pub use query::{
     MAX_RESULTS_PER_PEER, QueryParams, QueryRegistry, ResultsPerPeer,

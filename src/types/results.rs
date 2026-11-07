@@ -68,6 +68,23 @@ impl ResultRegistry {
         self.results.contains_key(&(*query_id, sender))
     }
 
+    /// Returns all results submitted for a query, ordered by submitter address.
+    pub fn for_query(&self, query_id: &Hash) -> Vec<&SearchResult> {
+        let mut results: Vec<&SearchResult> = self
+            .results
+            .iter()
+            .filter(|((id, _), _)| id == query_id)
+            .map(|(_, result)| result)
+            .collect();
+        results.sort_by(|left, right| left.sender.as_slice().cmp(right.sender.as_slice()));
+        results
+    }
+
+    /// Returns the number of results submitted for a query.
+    pub fn count_for_query(&self, query_id: &Hash) -> usize {
+        self.results.keys().filter(|(id, _)| id == query_id).count()
+    }
+
     /// Returns the number of stored results.
     pub fn len(&self) -> usize {
         self.results.len()
@@ -358,6 +375,35 @@ mod tests {
         let result = SearchResult::new(query.query_id, vec![skill(1, -1)], 1, Address::ZERO);
 
         assert!(result.is_err());
+    }
+
+    #[lyquid_test::test]
+    fn returns_results_for_a_query_in_sender_order() {
+        let query = query_with_k(10);
+        let first = SearchResult::new(
+            query.query_id,
+            vec![skill(1, 1)],
+            1,
+            Address::from([1u8; 20]),
+        )
+        .unwrap();
+        let second = SearchResult::new(
+            query.query_id,
+            vec![skill(2, 2)],
+            1,
+            Address::from([2u8; 20]),
+        )
+        .unwrap();
+
+        let mut registry = ResultRegistry::default();
+        registry.insert(&query, second).unwrap();
+        registry.insert(&query, first).unwrap();
+
+        assert_eq!(registry.count_for_query(&query.query_id), 2);
+        let results = registry.for_query(&query.query_id);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].sender, Address::from([1u8; 20]));
+        assert_eq!(results[1].sender, Address::from([2u8; 20]));
     }
 
     #[lyquid_test::test]

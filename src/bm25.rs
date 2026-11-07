@@ -10,6 +10,8 @@
 // TODO: use khive_bm25::Bm25Index once its Instant-based metrics can be disabled (or vendor the tokenizer and score types) so this scorer cannot drift from upstream.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
 
 use khive_bm25::{DeterministicScore, tokenize};
 use lyquid::prelude::{Hash, HashMap, new_hashmap, new_hashset};
@@ -26,32 +28,98 @@ thread_local! {
     /// Memoizes indexed skills by digest for the lifetime of the guest.
     /// A skill's digest covers its canonical encoding, so a cache hit is
     /// equivalent to re-tokenizing the same skill.
-    static INDEX_CACHE: RefCell<HashMap<Hash, IndexedSkill>> = RefCell::new(new_hashmap());
+    static INDEX_CACHE: RefCell<IndexCache> = RefCell::new(IndexCache::new(1024));
+}
+
+/// A bounded, least-recently-used cache of indexed skills.
+struct IndexCache {
+    entries: HashMap<Hash, IndexedSkill>,
+    order: VecDeque<Hash>,
+    /// Maximum number of entries kept before the least-recently-used one is
+    /// evicted.
+    max_cached: usize,
+}
+
+impl IndexCache {
+    fn new(max_cached: usize) -> Self {
+        Self {
+            entries: new_hashmap(),
+            order: VecDeque::new(),
+            max_cached,
+        }
+    }
+
+    fn get(&mut self, digest: &Hash) -> Option<IndexedSkill> {
+        let cached = self.entries.get(digest).cloned()?;
+        self.touch(digest);
+        Some(cached)
+    }
+
+    fn insert(&mut self, digest: Hash, skill: IndexedSkill) {
+        if self.entries.contains_key(&digest) {
+            self.entries.insert(digest, skill);
+            self.touch(&digest);
+            return;
+        }
+
+        while self.entries.len() >= self.max_cached {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(digest, skill);
+        self.order.push_back(digest);
+    }
+
+    /// Marks `digest` as the most recently used entry.
+    fn touch(&mut self, digest: &Hash) {
+        if let Some(position) = self.order.iter().position(|entry| entry == digest) {
+            if let Some(entry) = self.order.remove(position) {
+                self.order.push_back(entry);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn remove(&mut self, digest: &Hash) -> Option<IndexedSkill> {
+        let removed = self.entries.remove(digest);
+        if removed.is_some() {
+            if let Some(position) = self.order.iter().position(|entry| entry == digest) {
+                self.order.remove(position);
+            }
+        }
+        removed
+    }
 }
 
 /// A skill prepared for scoring.
+///
+/// Token storage is shared via [`Rc`] so cache hits are reference-count bumps
+/// rather than full copies.
 #[derive(Clone)]
 struct IndexedSkill {
     digest: Hash,
-    tokens: Vec<String>,
-    term_freqs: HashMap<String, u32>,
+    tokens: Rc<Vec<String>>,
+    term_freqs: Rc<HashMap<String, u32>>,
 }
 
 impl IndexedSkill {
     fn new(skill: &Skill, digest: Hash) -> Self {
-        if let Some(cached) = INDEX_CACHE.with(|cache| cache.borrow().get(&digest).cloned()) {
+        if let Some(cached) = INDEX_CACHE.with(|cache| cache.borrow_mut().get(&digest)) {
+            debug_assert_eq!(cached.digest, digest);
             return cached;
         }
 
-        let tokens = tokenize(&skill.search_text());
+        let tokens = Rc::new(tokenize(&skill.search_text()));
         let mut term_freqs = new_hashmap();
-        for token in &tokens {
+        for token in tokens.iter() {
             *term_freqs.entry(token.clone()).or_insert(0) += 1;
         }
         let indexed = Self {
             digest,
             tokens,
-            term_freqs,
+            term_freqs: Rc::new(term_freqs),
         };
         INDEX_CACHE.with(|cache| {
             cache.borrow_mut().insert(digest, indexed.clone());
@@ -217,6 +285,28 @@ mod tests {
         vec![load_doc_coauthoring(), load_internal_comms()]
     }
 
+    /// Removes a test digest from the cache even if an assertion panics.
+    struct CacheGuard(Hash);
+
+    impl Drop for CacheGuard {
+        fn drop(&mut self) {
+            INDEX_CACHE.with(|cache| {
+                cache.borrow_mut().remove(&self.0);
+            });
+        }
+    }
+
+    fn synthetic_skill(index: usize) -> IndexedSkill {
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&(index as u64).to_le_bytes());
+        let digest = Hash::from_bytes(bytes);
+        IndexedSkill {
+            digest,
+            tokens: Rc::new(Vec::new()),
+            term_freqs: Rc::new(new_hashmap()),
+        }
+    }
+
     fn find_skill<'a>(skills: &'a [Skill], match_: &SkillMatch) -> &'a Skill {
         skills
             .iter()
@@ -339,6 +429,7 @@ mod tests {
             Vec::new(),
         );
         let digest = skill.digest().unwrap();
+        let _guard = CacheGuard(digest);
 
         INDEX_CACHE.with(|cache| cache.borrow_mut().remove(&digest));
         let indexed = IndexedSkill::new(&skill, digest);
@@ -346,7 +437,7 @@ mod tests {
         assert!(!indexed.tokens.is_empty());
         INDEX_CACHE.with(|cache| {
             let cache = cache.borrow();
-            let cached = cache.get(&digest).expect("a miss must cache its result");
+            let cached = cache.entries.get(&digest).expect("a miss must cache its result");
             assert_eq!(cached.tokens, indexed.tokens);
             assert_eq!(cached.term_freqs, indexed.term_freqs);
         });
@@ -362,12 +453,13 @@ mod tests {
             Vec::new(),
         );
         let digest = skill.digest().unwrap();
+        let _guard = CacheGuard(digest);
         let mut term_freqs = new_hashmap();
         term_freqs.insert("cached-sentinel".to_string(), 1);
         let sentinel = IndexedSkill {
             digest,
-            tokens: vec!["cached-sentinel".to_string()],
-            term_freqs,
+            tokens: Rc::new(vec!["cached-sentinel".to_string()]),
+            term_freqs: Rc::new(term_freqs),
         };
         INDEX_CACHE.with(|cache| {
             cache.borrow_mut().insert(digest, sentinel.clone());
@@ -378,5 +470,43 @@ mod tests {
         // A hit must return the cached document verbatim, not re-tokenize.
         assert_eq!(indexed.tokens, sentinel.tokens);
         assert_eq!(indexed.term_freqs, sentinel.term_freqs);
+    }
+
+    #[lyquid_test::test]
+    fn cached_search_matches_cold_search() {
+        let skills = fixtures();
+        INDEX_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            for skill in &skills {
+                cache.remove(&skill.digest().unwrap());
+            }
+        });
+
+        let cold = search("write a design doc", 2, &skills);
+        let warm = search("write a design doc", 2, &skills);
+
+        assert_eq!(cold, warm);
+    }
+
+    #[lyquid_test::test]
+    fn cache_evicts_the_least_recently_used_entry() {
+        let max_cached = 3;
+        let mut cache = IndexCache::new(max_cached);
+        let entries: Vec<IndexedSkill> = (0..=max_cached).map(synthetic_skill).collect();
+        for skill in &entries[..max_cached] {
+            cache.insert(skill.digest, skill.clone());
+        }
+
+        // Touch the oldest entry, making the second entry the LRU one.
+        assert!(cache.get(&entries[0].digest).is_some());
+        cache.insert(
+            entries[max_cached].digest,
+            entries[max_cached].clone(),
+        );
+
+        assert!(cache.get(&entries[0].digest).is_some());
+        assert!(cache.get(&entries[1].digest).is_none());
+        assert_eq!(cache.entries.len(), max_cached);
+        assert_eq!(cache.order.len(), max_cached);
     }
 }

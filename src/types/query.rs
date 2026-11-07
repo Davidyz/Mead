@@ -245,6 +245,10 @@ pub struct SearchQuery {
         deserialize_with = "deserialize_hash"
     )]
     pub query_digest: Hash,
+    /// Query text. Only the digest is committed by the query ID; the text is
+    /// carried so every hosting peer can run the same search.
+    #[serde(default)]
+    pub query_text: String,
     /// Search parameters (e.g., number of results per peer).
     pub params: QueryParams,
     /// UTC timestamp of when the query was created, in seconds since the Unix epoch.
@@ -289,8 +293,12 @@ impl SearchQuery {
         timestamp: u64,
         sender: Address,
     ) -> LyquidResult<Self> {
-        let query_digest = blake3::hash(query.as_ref());
-        Self::from_digest(query_digest, params, timestamp, sender)
+        let query_bytes = query.as_ref();
+        let query_digest = blake3::hash(query_bytes);
+        let mut query = Self::from_digest(query_digest, params, timestamp, sender)?;
+        query.query_text = String::from_utf8(query_bytes.to_vec())
+            .map_err(|_| invalid_input("query text must be valid UTF-8"))?;
+        Ok(query)
     }
 
     /// Creates a query from an already-computed query-text digest.
@@ -304,6 +312,7 @@ impl SearchQuery {
         let query = Self {
             query_id,
             query_digest,
+            query_text: String::new(),
             params,
             timestamp,
             sender,

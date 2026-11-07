@@ -34,10 +34,16 @@ state! {
     network query_registry: QueryRegistry = QueryRegistry::default();
     network result_registry: ResultRegistry = ResultRegistry::default();
     network node_registry: NodeRegistry = NodeRegistry::default();
+    // Query text is stored on-chain so every hosting node can run the search.
+    network search_texts: HashMap<Hash, String> = new_hashmap();
 
     // Node-local notifications
     instance pending_searches: Vec<Hash> = Vec::new();
     instance ready_queries: Vec<Hash> = Vec::new();
+    instance processed_searches: HashSet<Hash> = new_hashset();
+    // Canonical skill bytes persisted in instance state so the in-memory
+    // manager can be rebuilt after the Lyquid VM restarts.
+    instance skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
 }
 
 // Registers the caller's node identity so it can receive search notifications.
@@ -111,6 +117,7 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
     plan_search_query(
         &mut *network.query_registry,
         &*network.node_registry,
+        &mut *network.search_texts,
         query,
         initiator,
     )
@@ -123,10 +130,18 @@ fn register_query(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
 fn plan_search_query(
     query_registry: &mut QueryRegistry,
     node_registry: &NodeRegistry,
+    search_texts: &mut HashMap<Hash, String>,
     query: SearchQuery,
     initiator: NodeID,
 ) -> LyquidResult<()> {
     let query_id = query.query_id;
+
+    if !query.query_text.is_empty() {
+        if blake3::hash(query.query_text.as_bytes()) != query.query_digest {
+            return Err(invalid_input("query text does not match the query digest"));
+        }
+        search_texts.insert(query_id, query.query_text.clone());
+    }
 
     query_registry.insert(query)?;
 
@@ -179,9 +194,21 @@ fn submit_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
         return Err(invalid_input("result signature is invalid"));
     }
 
-    let query = ctx
-        .network
-        .query_registry
+    let network = &mut *ctx.network;
+    record_search_result(
+        &mut *network.query_registry,
+        &mut *network.result_registry,
+        result,
+    )
+}
+
+// Stores a result and triggers completion when every expected peer has answered.
+fn record_search_result(
+    query_registry: &mut QueryRegistry,
+    result_registry: &mut ResultRegistry,
+    result: SearchResult,
+) -> LyquidResult<()> {
+    let query = query_registry
         .get(&result.query_id)
         .cloned()
         .ok_or_else(|| LyquidError::LyquidRuntime("query is not registered".into()))?;
@@ -189,13 +216,11 @@ fn submit_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
     let query_id = result.query_id;
     let sender = result.sender;
 
-    ctx.network.result_registry.insert(&query, result)?;
-    ctx.network
-        .query_registry
-        .mark_responder(query_id, sender)?;
+    result_registry.insert(&query, result)?;
+    query_registry.mark_responder(query_id, sender)?;
 
     let position = lyquor_api::chain_pos()?;
-    if ctx.network.query_registry.is_complete(&query_id, position) {
+    if query_registry.is_complete(&query_id, position) {
         trigger!(
             check_query_ready(query_id: HashBytes = HashBytes::from(query_id)),
             TriggerMode::Commit
@@ -266,7 +291,21 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         return Ok(());
     }
 
-    let input = encode_by_fields!(query_id: HashBytes = HashBytes::from(query_id));
+    let query_text = ctx
+        .network
+        .search_texts
+        .get(&query_id)
+        .cloned()
+        .ok_or_else(|| invalid_input("query text is not available on-chain"))?;
+
+    lyquid::println!(
+        "mead: announcing search {query_id} to {} peers",
+        expected_nodes.len()
+    );
+    let input = encode_by_fields!(
+        query_id: HashBytes = HashBytes::from(query_id),
+        query_text: String = query_text
+    );
     lyquor_api::universal_procedural_call(
         ctx.lyquid_id,
         None,
@@ -291,23 +330,127 @@ fn search_request(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<NodeID>> {
         .unwrap_or_default())
 }
 
-// UPC request step: runs on each selected peer and records the pending query.
+// UPC request step: runs on each selected peer and schedules local processing.
 #[method::instance(upc(request))]
-fn search_request(ctx: &mut _, query_id: HashBytes) -> LyquidResult<bool> {
+fn search_request(ctx: &mut _, query_id: HashBytes, query_text: String) -> LyquidResult<bool> {
     let query_id = Hash::from(query_id);
 
-    if !ctx.network.query_registry.contains(&query_id) {
-        return Err(invalid_input("query is not registered"));
+    let query = ctx
+        .network
+        .query_registry
+        .get(&query_id)
+        .cloned()
+        .ok_or_else(|| invalid_input("query is not registered"))?;
+
+    if blake3::hash(query_text.as_bytes()) != query.query_digest {
+        return Err(invalid_input(
+            "query text does not match the on-chain digest",
+        ));
     }
 
-    let mut pending = ctx.instance.pending_searches.write();
-    if !pending.contains(&query_id) {
-        pending.push(query_id);
+    {
+        let mut pending = ctx.instance.pending_searches.write();
+        if !pending.contains(&query_id) {
+            pending.push(query_id);
+        }
     }
+    lyquid::println!("mead: peer {} received search {query_id}", ctx.node_id);
     Ok(true)
 }
 
-// Accepts a certified search initiation and starts peer coordination.
+// Runs the local BM25 search for an assigned query and submits the result.
+#[method::instance]
+fn process_assigned_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
+    process_assigned_search_impl(&mut ctx, Hash::from(query_id))
+}
+
+fn process_assigned_search_impl(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    query_id: Hash,
+) -> LyquidResult<()> {
+    if ctx.network.query_registry.initiator_node(&query_id) == Some(ctx.node_id) {
+        return Ok(());
+    }
+
+    let assigned = ctx
+        .network
+        .query_registry
+        .expected_nodes(&query_id)
+        .is_some_and(|nodes| nodes.contains(&ctx.node_id));
+    if !assigned || ctx.instance.processed_searches.read().contains(&query_id) {
+        return Ok(());
+    }
+
+    let Some(query) = ctx.network.query_registry.get(&query_id).cloned() else {
+        return Ok(());
+    };
+    let Some(query_text) = ctx.network.search_texts.get(&query_id).cloned() else {
+        return Ok(());
+    };
+    if blake3::hash(query_text.as_bytes()) != query.query_digest {
+        return Err(invalid_input(
+            "query text does not match the on-chain digest",
+        ));
+    }
+
+    ensure_skills_loaded(ctx)?;
+    let skills: Vec<Skill> = match SkillManager::shared() {
+        Ok(manager) => manager.iter().map(|(_, skill)| (*skill).clone()).collect(),
+        Err(SkillError::NotInitialized) => Vec::new(),
+        Err(error) => return Err(invalid_input(error.to_string())),
+    };
+
+    let matches = bm25::search(&query_text, query.params.k as usize, &skills);
+    lyquid::println!(
+        "mead: peer {} searched {query_id}: {} skills -> {} matches",
+        ctx.node_id,
+        skills.len(),
+        matches.len()
+    );
+    let timestamp = lyquor_api::systime()? / 1000;
+    let sender = lyquor_api::get_address_by_ed25519(ctx.node_id.0)
+        .ok()
+        .flatten()
+        .ok_or_else(|| invalid_input("node has no on-chain address"))?;
+
+    let mut result = SearchResult::new(query_id, matches, timestamp, sender)?;
+    let signature = lyquor_api::sign(Bytes::from(result.signing_payload()), Cipher::Ed25519)?;
+    let signature: Vec<u8> = Vec::from(signature.as_ref());
+    result.set_signature(signature);
+
+    let target = OracleTarget {
+        seq_id: lyquor_api::sequence_backend_id()?,
+        target: OracleServiceTarget::LVM(ctx.lyquid_id),
+    };
+    let oracle = ctx.network.search.clone();
+    let call = oracle.certify(
+        ctx,
+        CertifiedCallParams {
+            origin: sender,
+            method: "coordinate_result".into(),
+            input: encode_by_fields!(result: SearchResult = result).into(),
+            target,
+        },
+        Bytes::new(),
+        None,
+        Some(UPC_ANNOUNCE_TIMEOUT_MS),
+    )?;
+
+    let Some(call) = call else {
+        return Err(invalid_input("result certification is unavailable"));
+    };
+    submit_certified_call!(call)?;
+    lyquid::println!("mead: peer {} submitted result for {query_id}", ctx.node_id);
+
+    ctx.instance.processed_searches.write().insert(query_id);
+    ctx.instance
+        .pending_searches
+        .write()
+        .retain(|pending| *pending != query_id);
+    Ok(())
+}
+
+// Accepts a certified search initiation and registers the query on-chain.
 //
 // The certificate proves that the search oracle committee approved this exact
 // query for this sender. The query keeps its own signature so peers can verify
@@ -329,17 +472,44 @@ fn coordinate_search(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
         .flatten()
         .ok_or_else(|| invalid_input("query sender has no ed25519 identity"))?;
 
+    lyquid::println!("mead: coordinate_search {}", query.query_id);
     let network = &mut *ctx.network;
     plan_search_query(
         &mut *network.query_registry,
         &*network.node_registry,
+        &mut *network.search_texts,
         query,
         initiator,
     )
 }
 
-// Oracle policy hook: approves only certified search calls that match the
-// expected target, route, caller, origin, and a validly signed query.
+// Accepts a certified peer result and records it on-chain.
+#[method::network(group = oracle::certified::search)]
+fn coordinate_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
+    if result.sender != ctx.origin {
+        return Err(invalid_input(
+            "result sender does not match the certificate origin",
+        ));
+    }
+    if !verify::verify_signed(&result) {
+        return Err(invalid_input("result signature is invalid"));
+    }
+
+    let network = &mut *ctx.network;
+    lyquid::println!(
+        "mead: recording result for {} from {}",
+        result.query_id,
+        result.sender
+    );
+    record_search_result(
+        &mut *network.query_registry,
+        &mut *network.result_registry,
+        result,
+    )
+}
+
+// Oracle policy hook: approves certified search calls for query creation and
+// peer result submission.
 #[method::instance(group = oracle::single_phase::search)]
 fn validate(
     ctx: &mut _,
@@ -354,7 +524,6 @@ fn validate(
 
     if target != expected_target
         || params.group != "search"
-        || params.method != "coordinate_search"
         || params.abi != InputABI::Lyquor
         || params.origin == Address::ZERO
         || params.caller != Address::from(ctx.lyquid_id)
@@ -362,15 +531,30 @@ fn validate(
         return Ok(false);
     }
 
-    let Some(input) = decode_by_fields!(&params.input, query: SearchQuery) else {
-        return Ok(false);
-    };
-
-    if input.query.sender != params.origin {
-        return Ok(false);
+    match params.method.as_str() {
+        "coordinate_search" => {
+            let Some(input) = decode_by_fields!(&params.input, query: SearchQuery) else {
+                return Ok(false);
+            };
+            if blake3::hash(input.query.query_text.as_bytes()) != input.query.query_digest {
+                return Ok(false);
+            }
+            if input.query.sender != params.origin {
+                return Ok(false);
+            }
+            Ok(verify::verify_signed(&input.query))
+        }
+        "coordinate_result" => {
+            let Some(input) = decode_by_fields!(&params.input, result: SearchResult) else {
+                return Ok(false);
+            };
+            if input.result.sender != params.origin {
+                return Ok(false);
+            }
+            Ok(verify::verify_signed(&input.result))
+        }
+        _ => Ok(false),
     }
-
-    Ok(verify::verify_signed(&input.query))
 }
 
 // Checks whether a query is complete and records it locally on the initiating node.
@@ -475,7 +659,8 @@ fn get_responders(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<Address>> {
 
 // Returns the number of skills currently registered on this node.
 #[method::instance(export = http, method = "GET", path_prefix = "/skills/count")]
-fn get_skill_count(_ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
+fn get_skill_count(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
+    ensure_skills_loaded(&mut ctx)?;
     skill_count_response()
 }
 
@@ -519,8 +704,9 @@ fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Re
         }
     };
 
+    let query_text = request.query;
     let timestamp = lyquor_api::systime()? / 1000;
-    let mut query = match SearchQuery::new(request.query.as_bytes(), params, timestamp, sender) {
+    let mut query = match SearchQuery::new(query_text.as_bytes(), params, timestamp, sender) {
         Ok(query) => query,
         Err(error) => return Ok(http_json_response(400, &json_error(&error.to_string()))),
     };
@@ -625,6 +811,27 @@ fn search_get_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Respon
     Ok(search_results_response(query_id, &results))
 }
 
+// Processes an assigned query on this peer and submits its result on-chain.
+#[method::instance(export = http, method = "POST", path_prefix = "/search/process")]
+fn search_process_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
+    let query_id = match parse_query_id_request(req.body.as_deref()) {
+        Ok(query_id) => query_id,
+        Err(message) => return Ok(http_json_response(400, &json_error(&message))),
+    };
+
+    match process_assigned_search_impl(&mut ctx, query_id) {
+        Ok(()) => {
+            let body = serde_json::json!({
+                "status": "processed",
+                "query_id": query_id.to_string(),
+            })
+            .to_string();
+            Ok(http_json_response(200, &body))
+        }
+        Err(error) => Ok(http_json_response(500, &json_error(&error.to_string()))),
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct SearchEndpointRequest {
     query: String,
@@ -717,7 +924,8 @@ fn search_results_response(query_id: Hash, results: &[&SearchResult]) -> http::R
 // Returns the name, description, and digest of every skill registered on this
 // node.
 #[method::instance(export = http, method = "GET", path_prefix = "/skills/list")]
-fn list_skills(_ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
+fn list_skills(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
+    ensure_skills_loaded(&mut ctx)?;
     let body = match SkillManager::shared() {
         Ok(manager) => skill_list_json(manager),
         Err(SkillError::NotInitialized) => "[]".to_owned(),
@@ -748,11 +956,14 @@ fn skill_list_json(manager: &SkillManager) -> String {
 // clients may send resource contents without precomputing their digests.
 // Upload endpoint under `/skills`.
 #[method::instance(export = http, method = "POST", path_prefix = "/skills/upload")]
-fn upload_skills_at_skills_upload(_ctx: &_, req: http::Request) -> LyquidResult<http::Response> {
-    handle_skill_upload(req)
+fn upload_skills_at_skills_upload(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
+    handle_skill_upload(&mut ctx, req)
 }
 
-fn handle_skill_upload(req: http::Request) -> LyquidResult<http::Response> {
+fn handle_skill_upload(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    req: http::Request,
+) -> LyquidResult<http::Response> {
     let (skill, digest) = match parse_uploaded_skill(req.body.as_deref()) {
         Ok(skill) => skill,
         Err(message) => return Ok(http_json_response(400, &json_error(&message))),
@@ -761,6 +972,16 @@ fn handle_skill_upload(req: http::Request) -> LyquidResult<http::Response> {
     if let Err(error) = register_uploaded_skill(&skill) {
         return Ok(http_json_response(500, &json_error(&error.to_string())));
     }
+
+    let digest_hash = match skill.digest() {
+        Ok(digest) => digest,
+        Err(error) => return Ok(http_json_response(500, &json_error(&error.to_string()))),
+    };
+    let bytes = match skill.canonical_bytes() {
+        Ok(bytes) => bytes,
+        Err(error) => return Ok(http_json_response(500, &json_error(&error.to_string()))),
+    };
+    ctx.instance.skill_blobs.write().insert(digest_hash, bytes);
 
     println!(
         "mead: accepted skill name={:?} description={:?} digest={digest}",
@@ -799,6 +1020,39 @@ fn parse_uploaded_skill(body: Option<&[u8]>) -> Result<(Skill, String), String> 
         .map_err(|error| format!("skill is invalid: {error}"))?
         .to_string();
     Ok((skill, digest))
+}
+
+// Rebuilds the in-memory catalog from the canonical bytes persisted in
+// instance state. The process-wide manager does not survive a Lyquid VM
+// restart, but instance state does.
+fn ensure_skills_loaded(ctx: &mut crate::__lyquid::InstanceContext) -> LyquidResult<()> {
+    let blobs: Vec<(Hash, Vec<u8>)> = ctx
+        .instance
+        .skill_blobs
+        .read()
+        .iter()
+        .map(|(digest, bytes)| (*digest, bytes.clone()))
+        .collect();
+    if blobs.is_empty() {
+        return Ok(());
+    }
+
+    if SkillManager::shared().is_err() {
+        SkillManager::init_shared(Vec::<Skill>::new())
+            .map_err(|error| invalid_input(error.to_string()))?;
+    }
+    let manager = SkillManager::shared().map_err(|error| invalid_input(error.to_string()))?;
+    for (digest, bytes) in blobs {
+        if manager.contains(&digest) {
+            continue;
+        }
+        let skill = Skill::from_canonical_bytes(&bytes)
+            .map_err(|error| invalid_input(error.to_string()))?;
+        manager
+            .append(skill)
+            .map_err(|error| invalid_input(error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn register_uploaded_skill(skill: &Skill) -> Result<(), SkillError> {
@@ -944,6 +1198,17 @@ mod tests {
 
         let error = parse_search_endpoint_request(Some(b"{")).unwrap_err();
         assert!(error.contains("invalid search request JSON"));
+    }
+
+    #[lyquid_test::test]
+    fn query_text_round_trips_through_certified_input_encoding() {
+        let query =
+            SearchQuery::new(b"skill", QueryParams { k: 5 }, 1, Address::from([1u8; 20])).unwrap();
+        let encoded = encode_by_fields!(query: SearchQuery = query.clone());
+        let decoded = decode_by_fields!(&encoded, query: SearchQuery).unwrap();
+
+        assert_eq!(decoded.query.query_text, "skill");
+        assert_eq!(decoded.query, query);
     }
 
     #[lyquid_test::test]

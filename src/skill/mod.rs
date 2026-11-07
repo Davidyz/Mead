@@ -11,7 +11,7 @@ mod manager;
 mod skill;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use error::{SkillError, SkillResult};
 pub use file::{Frontmatter, MarkdownFile, SkillResource, TextFile};

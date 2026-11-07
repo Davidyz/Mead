@@ -13,8 +13,8 @@ pub mod verify;
 mod api;
 
 use api::skills::{
-    ensure_skills_loaded, ensure_skills_loaded_from, handle_skill_upload, skill_count_response,
-    skill_list_json,
+    ensure_skills_loaded, ensure_skills_loaded_from, ensure_skills_loaded_immutable,
+    handle_skill_upload, skill_count_response, skill_list_json,
 };
 use api::{
     PeerSearchReply, SearchReply, SearchReplyCache, parse_query_id_request,
@@ -704,7 +704,7 @@ fn get_responders(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<Address>> {
 // Returns the number of skills currently registered on this node.
 #[method::instance(export = http, method = "GET", path_prefix = "/skills/count")]
 fn get_skill_count(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
-    ensure_skills_loaded(&mut ctx)?;
+    ensure_skills_loaded(&ctx)?;
     skill_count_response()
 }
 
@@ -839,14 +839,51 @@ fn search_get_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Respon
         ));
     }
 
-    Ok(search_results_response(query_id, &results))
+    let query = ctx
+        .network
+        .query_registry
+        .get(&query_id)
+        .cloned()
+        .ok_or_else(|| invalid_input("query is not registered"))?;
+    let local_result = local_search_result(&ctx, &query)?;
+    let mut combined = results;
+    combined.push(&local_result);
+
+    Ok(search_results_response(query_id, &combined))
+}
+
+// Runs the query against this node's own skill catalog when the initiator
+// fetches the final results. The local result is returned to the caller but is
+// not written to the on-chain result registry.
+fn local_search_result(
+    ctx: &crate::__lyquid::ImmutableInstanceContext,
+    query: &SearchQuery,
+) -> LyquidResult<SearchResult> {
+    ensure_skills_loaded_immutable(ctx)?;
+    let skills: Vec<Skill> = match SkillManager::shared() {
+        Ok(manager) => manager.iter().map(|(_, skill)| (*skill).clone()).collect(),
+        Err(SkillError::NotInitialized) => Vec::new(),
+        Err(error) => return Err(invalid_input(error.to_string())),
+    };
+
+    let matches = bm25::search(&query.query_text, query.params.k as usize, &skills);
+    let timestamp = lyquor_api::systime()? / 1000;
+    let sender = lyquor_api::get_address_by_ed25519(ctx.node_id.0)
+        .ok()
+        .flatten()
+        .ok_or_else(|| invalid_input("node has no on-chain address"))?;
+
+    let mut result = SearchResult::new(query.query_id, matches, timestamp, sender)?;
+    let signature = lyquor_api::sign(Bytes::from(result.signing_payload()), Cipher::Ed25519)?;
+    result.set_signature(Vec::from(signature.as_ref()));
+    Ok(result)
 }
 
 // Returns the name, description, and digest of every skill registered on this
 // node.
 #[method::instance(export = http, method = "GET", path_prefix = "/skills/list")]
 fn list_skills(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
-    ensure_skills_loaded(&mut ctx)?;
+    ensure_skills_loaded(&ctx)?;
     let body = match SkillManager::shared() {
         Ok(manager) => skill_list_json(manager),
         Err(SkillError::NotInitialized) => "[]".to_owned(),

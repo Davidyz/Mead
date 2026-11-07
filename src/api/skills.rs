@@ -102,7 +102,14 @@ pub(crate) fn parse_uploaded_skill(body: Option<&[u8]>) -> Result<(Skill, String
 // Rebuilds the in-memory catalog from the canonical bytes persisted in
 // instance state. The process-wide manager does not survive a Lyquid VM
 // restart, but instance state does.
-pub(crate) fn ensure_skills_loaded(ctx: &mut crate::__lyquid::InstanceContext) -> LyquidResult<()> {
+pub(crate) fn ensure_skills_loaded(ctx: &crate::__lyquid::InstanceContext) -> LyquidResult<()> {
+    let blobs = ctx.instance.skill_blobs.read();
+    ensure_skills_loaded_from(&blobs)
+}
+
+pub(crate) fn ensure_skills_loaded_immutable(
+    ctx: &crate::__lyquid::ImmutableInstanceContext,
+) -> LyquidResult<()> {
     let blobs = ctx.instance.skill_blobs.read();
     ensure_skills_loaded_from(&blobs)
 }

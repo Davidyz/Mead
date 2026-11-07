@@ -52,6 +52,27 @@ fn register_node(ctx: &mut _) -> LyquidResult<()> {
     Ok(())
 }
 
+// Registers a node identity supplied by tooling or a deployment client.
+//
+// The bartender mapping must bind `address` to `node`, so a caller cannot
+// register an arbitrary identity that does not belong to that address.
+#[method::network(export = eth)]
+fn register_node_address(ctx: &mut _, node: NodeID, address: Address) -> LyquidResult<()> {
+    if address == Address::ZERO {
+        return Err(invalid_input("node address must not be zero"));
+    }
+
+    let resolved = lyquor_api::get_ed25519_by_address(address).ok().flatten();
+    if resolved != Some(node) {
+        return Err(invalid_input(
+            "address is not bound to the supplied node identity",
+        ));
+    }
+
+    ctx.network.node_registry.register(node)?;
+    Ok(())
+}
+
 // Removes the caller's own node identity from the registry.
 //
 // The identity is derived from the caller, so a node can only unregister itself.

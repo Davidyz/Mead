@@ -9,6 +9,8 @@
 
 // TODO: use khive_bm25::Bm25Index once its Instant-based metrics can be disabled (or vendor the tokenizer and score types) so this scorer cannot drift from upstream.
 
+use std::cell::RefCell;
+
 use khive_bm25::{DeterministicScore, tokenize};
 use lyquid::prelude::{Hash, HashMap, new_hashmap, new_hashset};
 
@@ -20,7 +22,15 @@ const K1: f64 = 1.2;
 /// Length normalization parameter.
 const B: f64 = 0.75;
 
+thread_local! {
+    /// Memoizes indexed skills by digest for the lifetime of the guest.
+    /// A skill's digest covers its canonical encoding, so a cache hit is
+    /// equivalent to re-tokenizing the same skill.
+    static INDEX_CACHE: RefCell<HashMap<Hash, IndexedSkill>> = RefCell::new(new_hashmap());
+}
+
 /// A skill prepared for scoring.
+#[derive(Clone)]
 struct IndexedSkill {
     digest: Hash,
     tokens: Vec<String>,
@@ -29,16 +39,24 @@ struct IndexedSkill {
 
 impl IndexedSkill {
     fn new(skill: &Skill, digest: Hash) -> Self {
+        if let Some(cached) = INDEX_CACHE.with(|cache| cache.borrow().get(&digest).cloned()) {
+            return cached;
+        }
+
         let tokens = tokenize(&skill.search_text());
         let mut term_freqs = new_hashmap();
         for token in &tokens {
             *term_freqs.entry(token.clone()).or_insert(0) += 1;
         }
-        Self {
+        let indexed = Self {
             digest,
             tokens,
             term_freqs,
-        }
+        };
+        INDEX_CACHE.with(|cache| {
+            cache.borrow_mut().insert(digest, indexed.clone());
+        });
+        indexed
     }
 
     fn len(&self) -> usize {
@@ -309,5 +327,56 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].bm25_score >= pair[1].bm25_score)
         );
+    }
+
+    #[lyquid_test::test]
+    fn indexing_a_miss_populates_the_cache() {
+        let skill = Skill::new(
+            "cache-miss-skill",
+            "cache-miss-skill",
+            "needle in the haystack",
+            "",
+            Vec::new(),
+        );
+        let digest = skill.digest().unwrap();
+
+        INDEX_CACHE.with(|cache| cache.borrow_mut().remove(&digest));
+        let indexed = IndexedSkill::new(&skill, digest);
+
+        assert!(!indexed.tokens.is_empty());
+        INDEX_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            let cached = cache.get(&digest).expect("a miss must cache its result");
+            assert_eq!(cached.tokens, indexed.tokens);
+            assert_eq!(cached.term_freqs, indexed.term_freqs);
+        });
+    }
+
+    #[lyquid_test::test]
+    fn indexing_a_hit_reads_from_the_cache() {
+        let skill = Skill::new(
+            "cache-hit-skill",
+            "cache-hit-skill",
+            "text that would tokenize differently",
+            "",
+            Vec::new(),
+        );
+        let digest = skill.digest().unwrap();
+        let mut term_freqs = new_hashmap();
+        term_freqs.insert("cached-sentinel".to_string(), 1);
+        let sentinel = IndexedSkill {
+            digest,
+            tokens: vec!["cached-sentinel".to_string()],
+            term_freqs,
+        };
+        INDEX_CACHE.with(|cache| {
+            cache.borrow_mut().insert(digest, sentinel.clone());
+        });
+
+        let indexed = IndexedSkill::new(&skill, digest);
+
+        // A hit must return the cached document verbatim, not re-tokenize.
+        assert_eq!(indexed.tokens, sentinel.tokens);
+        assert_eq!(indexed.term_freqs, sentinel.term_freqs);
     }
 }

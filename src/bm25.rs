@@ -10,7 +10,6 @@
 // TODO: use khive_bm25::Bm25Index once its Instant-based metrics can be disabled (or vendor the tokenizer and score types) so this scorer cannot drift from upstream.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::rc::Rc;
 
 use khive_bm25::{DeterministicScore, tokenize};
@@ -33,63 +32,151 @@ thread_local! {
 
 /// A bounded, least-recently-used cache of indexed skills.
 struct IndexCache {
-    entries: HashMap<Hash, IndexedSkill>,
-    order: VecDeque<Hash>,
+    entries: HashMap<Hash, CacheEntry>,
+    /// Most recently used digest.
+    head: Option<Hash>,
+    /// Least recently used digest.
+    tail: Option<Hash>,
     /// Maximum number of entries kept before the least-recently-used one is
-    /// evicted.
+    /// evicted. Zero disables caching.
     max_cached: usize,
+}
+
+struct CacheEntry {
+    skill: IndexedSkill,
+    prev: Option<Hash>,
+    next: Option<Hash>,
 }
 
 impl IndexCache {
     fn new(max_cached: usize) -> Self {
         Self {
             entries: new_hashmap(),
-            order: VecDeque::new(),
+            head: None,
+            tail: None,
             max_cached,
         }
     }
 
     fn get(&mut self, digest: &Hash) -> Option<IndexedSkill> {
-        let cached = self.entries.get(digest).cloned()?;
+        let cached = self.entries.get(digest)?.skill.clone();
         self.touch(digest);
         Some(cached)
     }
 
     fn insert(&mut self, digest: Hash, skill: IndexedSkill) {
+        if self.max_cached == 0 {
+            return;
+        }
+
         if self.entries.contains_key(&digest) {
-            self.entries.insert(digest, skill);
+            if let Some(entry) = self.entries.get_mut(&digest) {
+                entry.skill = skill;
+            }
             self.touch(&digest);
             return;
         }
 
         while self.entries.len() >= self.max_cached {
-            let Some(oldest) = self.order.pop_front() else {
+            if !self.evict_least_recently_used() {
                 break;
-            };
-            self.entries.remove(&oldest);
-        }
-        self.entries.insert(digest, skill);
-        self.order.push_back(digest);
-    }
-
-    /// Marks `digest` as the most recently used entry.
-    fn touch(&mut self, digest: &Hash) {
-        if let Some(position) = self.order.iter().position(|entry| entry == digest) {
-            if let Some(entry) = self.order.remove(position) {
-                self.order.push_back(entry);
             }
         }
+
+        self.entries.insert(
+            digest,
+            CacheEntry {
+                skill,
+                prev: None,
+                next: None,
+            },
+        );
+        self.push_front(digest);
     }
 
     #[cfg(test)]
     fn remove(&mut self, digest: &Hash) -> Option<IndexedSkill> {
-        let removed = self.entries.remove(digest);
-        if removed.is_some() {
-            if let Some(position) = self.order.iter().position(|entry| entry == digest) {
-                self.order.remove(position);
-            }
+        if !self.entries.contains_key(digest) {
+            return None;
         }
-        removed
+        self.detach(digest);
+        self.entries.remove(digest).map(|entry| entry.skill)
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.head = None;
+        self.tail = None;
+    }
+
+    /// Marks `digest` as the most recently used entry.
+    fn touch(&mut self, digest: &Hash) {
+        if self.head == Some(*digest) {
+            return;
+        }
+        self.detach(digest);
+        self.push_front(*digest);
+    }
+
+    /// Removes `digest` from the recency list without removing its entry.
+    fn detach(&mut self, digest: &Hash) {
+        let Some((prev, next)) = self
+            .entries
+            .get(digest)
+            .map(|entry| (entry.prev, entry.next))
+        else {
+            return;
+        };
+
+        match prev {
+            Some(prev) => {
+                if let Some(entry) = self.entries.get_mut(&prev) {
+                    entry.next = next;
+                }
+            }
+            None => self.head = next,
+        }
+        match next {
+            Some(next) => {
+                if let Some(entry) = self.entries.get_mut(&next) {
+                    entry.prev = prev;
+                }
+            }
+            None => self.tail = prev,
+        }
+
+        if let Some(entry) = self.entries.get_mut(digest) {
+            entry.prev = None;
+            entry.next = None;
+        }
+    }
+
+    /// Inserts `digest` at the most-recently-used end of the list.
+    fn push_front(&mut self, digest: Hash) {
+        let previous_head = self.head;
+        if let Some(entry) = self.entries.get_mut(&digest) {
+            entry.prev = None;
+            entry.next = previous_head;
+        }
+
+        match previous_head {
+            Some(head) => {
+                if let Some(entry) = self.entries.get_mut(&head) {
+                    entry.prev = Some(digest);
+                }
+            }
+            None => self.tail = Some(digest),
+        }
+        self.head = Some(digest);
+    }
+
+    fn evict_least_recently_used(&mut self) -> bool {
+        let Some(lru) = self.tail else {
+            return false;
+        };
+        self.detach(&lru);
+        self.entries.remove(&lru).is_some()
     }
 }
 
@@ -107,7 +194,6 @@ struct IndexedSkill {
 impl IndexedSkill {
     fn new(skill: &Skill, digest: Hash) -> Self {
         if let Some(cached) = INDEX_CACHE.with(|cache| cache.borrow_mut().get(&digest)) {
-            debug_assert_eq!(cached.digest, digest);
             return cached;
         }
 
@@ -121,9 +207,13 @@ impl IndexedSkill {
             tokens,
             term_freqs: Rc::new(term_freqs),
         };
-        INDEX_CACHE.with(|cache| {
-            cache.borrow_mut().insert(digest, indexed.clone());
-        });
+        // Empty documents are discarded by `index_skills`, so caching them
+        // would only consume slots.
+        if !indexed.tokens.is_empty() {
+            INDEX_CACHE.with(|cache| {
+                cache.borrow_mut().insert(digest, indexed.clone());
+            });
+        }
         indexed
     }
 
@@ -307,6 +397,66 @@ mod tests {
         }
     }
 
+    fn recency_order(cache: &IndexCache) -> Vec<Hash> {
+        let mut forward = Vec::new();
+        let mut cursor = cache.head;
+        while let Some(digest) = cursor {
+            assert!(
+                forward.len() <= cache.entries.len(),
+                "forward recency list contains a cycle"
+            );
+            assert!(
+                !forward.contains(&digest),
+                "forward recency list contains a duplicate"
+            );
+            forward.push(digest);
+            cursor = cache.entries.get(&digest).and_then(|entry| entry.next);
+        }
+        assert_eq!(forward.len(), cache.entries.len());
+
+        let mut backward = Vec::new();
+        let mut cursor = cache.tail;
+        while let Some(digest) = cursor {
+            assert!(
+                backward.len() <= cache.entries.len(),
+                "backward recency list contains a cycle"
+            );
+            assert!(
+                !backward.contains(&digest),
+                "backward recency list contains a duplicate"
+            );
+            backward.push(digest);
+            cursor = cache.entries.get(&digest).and_then(|entry| entry.prev);
+        }
+        assert_eq!(backward.len(), cache.entries.len());
+        backward.reverse();
+        assert_eq!(forward, backward);
+
+        if let Some(head) = cache.head {
+            assert_eq!(cache.entries.get(&head).and_then(|entry| entry.prev), None);
+        }
+        if let Some(tail) = cache.tail {
+            assert_eq!(cache.entries.get(&tail).and_then(|entry| entry.next), None);
+        }
+        forward
+    }
+
+    /// Clears the shared cache before and after a test, even on panic.
+    struct CacheReset;
+
+    impl CacheReset {
+        fn new() -> Self {
+            INDEX_CACHE.with(|cache| cache.borrow_mut().clear());
+            Self
+        }
+    }
+
+    impl Drop for CacheReset {
+        fn drop(&mut self) {
+            INDEX_CACHE.with(|cache| cache.borrow_mut().clear());
+        }
+    }
+
     fn find_skill<'a>(skills: &'a [Skill], match_: &SkillMatch) -> &'a Skill {
         skills
             .iter()
@@ -390,6 +540,7 @@ mod tests {
 
     #[lyquid_test::test]
     fn caps_results_at_max_matches() {
+        let _reset = CacheReset::new();
         let skills: Vec<Skill> = (0..=MAX_MATCHES)
             .map(|index| {
                 Skill::new(
@@ -435,12 +586,16 @@ mod tests {
         let indexed = IndexedSkill::new(&skill, digest);
 
         assert!(!indexed.tokens.is_empty());
-        INDEX_CACHE.with(|cache| {
-            let cache = cache.borrow();
-            let cached = cache.entries.get(&digest).expect("a miss must cache its result");
-            assert_eq!(cached.tokens, indexed.tokens);
-            assert_eq!(cached.term_freqs, indexed.term_freqs);
+        let cached = INDEX_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .entries
+                .get(&digest)
+                .map(|entry| entry.skill.clone())
         });
+        let cached = cached.expect("a miss must cache its result");
+        assert_eq!(cached.tokens, indexed.tokens);
+        assert_eq!(cached.term_freqs, indexed.term_freqs);
     }
 
     #[lyquid_test::test]
@@ -474,6 +629,7 @@ mod tests {
 
     #[lyquid_test::test]
     fn cached_search_matches_cold_search() {
+        let _reset = CacheReset::new();
         let skills = fixtures();
         INDEX_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
@@ -499,14 +655,42 @@ mod tests {
 
         // Touch the oldest entry, making the second entry the LRU one.
         assert!(cache.get(&entries[0].digest).is_some());
-        cache.insert(
-            entries[max_cached].digest,
-            entries[max_cached].clone(),
-        );
+        cache.insert(entries[max_cached].digest, entries[max_cached].clone());
 
         assert!(cache.get(&entries[0].digest).is_some());
         assert!(cache.get(&entries[1].digest).is_none());
         assert_eq!(cache.entries.len(), max_cached);
-        assert_eq!(cache.order.len(), max_cached);
+        assert_eq!(recency_order(&cache).len(), max_cached);
+    }
+
+    #[lyquid_test::test]
+    fn zero_capacity_disables_caching() {
+        let mut cache = IndexCache::new(0);
+        let skill = synthetic_skill(0);
+
+        cache.insert(skill.digest, skill.clone());
+
+        assert!(cache.entries.is_empty());
+        assert!(cache.get(&skill.digest).is_none());
+    }
+
+    #[lyquid_test::test]
+    fn repeated_indexing_reuses_the_cached_allocation() {
+        let skill = Skill::new(
+            "cache-natural-hit-skill",
+            "cache-natural-hit-skill",
+            "needle in the haystack",
+            "",
+            Vec::new(),
+        );
+        let digest = skill.digest().unwrap();
+        let _guard = CacheGuard(digest);
+        INDEX_CACHE.with(|cache| cache.borrow_mut().remove(&digest));
+
+        let first = IndexedSkill::new(&skill, digest);
+        let second = IndexedSkill::new(&skill, digest);
+
+        assert!(Rc::ptr_eq(&first.tokens, &second.tokens));
+        assert!(Rc::ptr_eq(&first.term_freqs, &second.term_freqs));
     }
 }

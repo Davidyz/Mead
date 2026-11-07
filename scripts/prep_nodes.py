@@ -36,7 +36,9 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -70,6 +72,8 @@ NODE_PORT_RE = re.compile(r":(?P<port>\d+)->10087/tcp")
 
 DEFAULT_ORACLE_THRESHOLD = 2
 NODE_ID_BYTES = 32
+DEFAULT_DEVNET_DIR = Path.home() / ".shakenup" / "ldk" / "docker" / "multi"
+DEFAULT_NODE_FUNDING_ETH = "10"
 
 
 @dataclass(frozen=True)
@@ -245,6 +249,120 @@ def node_from_container(index: int, container: str, port: int) -> Node:
     node_id = node_id_from_logs(container)
     print(f"node{index}: {node_id} ({container}, port {port})")
     return Node(index=index, container=container, node_id=node_id, port=port)
+
+
+def find_anvil_container(explicit: str | None = None) -> str:
+    if explicit is not None:
+        return explicit
+    names = run(
+        ["docker", "container", "ls", "--format", "{{.Names}}"],
+        capture_output=True,
+    ).stdout.splitlines()
+    for name in names:
+        if "anvil" in name:
+            return name
+    raise RuntimeError("could not find the devnet anvil container")
+
+
+def node_submitter_address(anvil_container: str, private_key: str) -> str:
+    return run(
+        [
+            "docker",
+            "exec",
+            anvil_container,
+            "cast",
+            "wallet",
+            "address",
+            "--private-key",
+            private_key,
+        ],
+        capture_output=True,
+    ).stdout.strip()
+
+
+def cast_balance(anvil_container: str, address: str) -> int:
+    output = run(
+        [
+            "docker",
+            "exec",
+            anvil_container,
+            "cast",
+            "balance",
+            "--rpc-url",
+            "http://127.0.0.1:8545",
+            address,
+        ],
+        capture_output=True,
+    ).stdout.strip()
+    return int(output.split()[0])
+
+
+def fund_nodes(
+    nodes: list[Node],
+    devnet_dir: Path,
+    *,
+    anvil_container: str | None,
+    funding_eth: str,
+) -> None:
+    """Top up each node submitter from the first devnet submitter account."""
+    if not devnet_dir.is_dir():
+        print(f"Skipping node funding: {devnet_dir} does not exist")
+        return
+
+    configs: dict[int, dict[str, object]] = {}
+    for node in nodes:
+        path = devnet_dir / f"node{node.index}.toml"
+        if not path.is_file():
+            print(f"Skipping node funding: {path} does not exist")
+            return
+        with path.open("rb") as file:
+            configs[node.index] = tomllib.load(file)
+
+    try:
+        funder_config = configs[1]["submitter"]["inline"]  # type: ignore[index]
+    except (KeyError, TypeError) as error:
+        raise RuntimeError(f"could not read the node1 submitter key: {error}") from error
+    if not isinstance(funder_config, str):
+        raise TypeError("node1 submitter.inline must be a string private key")
+
+    anvil = find_anvil_container(anvil_container)
+    funder = node_submitter_address(anvil, funder_config)
+    target_balance = int(Decimal(str(funding_eth)) * Decimal(10**18))
+    print(f"Funding node submitters from {funder} with {funding_eth} ETH minimum...")
+
+    for node in nodes:
+        config = configs[node.index]
+        try:
+            private_key = config["submitter"]["inline"]  # type: ignore[index]
+        except (KeyError, TypeError):
+            print(f"node{node.index}: no submitter.inline private key; skipping")
+            continue
+        if not isinstance(private_key, str):
+            print(f"node{node.index}: invalid submitter.inline; skipping")
+            continue
+        address = node_submitter_address(anvil, private_key)
+        balance = cast_balance(anvil, address)
+        if balance >= target_balance:
+            print(f"node{node.index}: {address} already has {balance} wei")
+            continue
+        run(
+            [
+                "docker",
+                "exec",
+                anvil,
+                "cast",
+                "send",
+                "--rpc-url",
+                "http://127.0.0.1:8545",
+                "--private-key",
+                funder_config,
+                "--value",
+                f"{funding_eth}ether",
+                address,
+            ],
+            capture_output=True,
+        )
+        print(f"node{node.index}: funded {address} with {funding_eth} ETH")
 
 
 def has_only_text_resources(skill_dir: Path) -> bool:
@@ -435,6 +553,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             f"(default: {DEFAULT_ORACLE_THRESHOLD})."
         ),
     )
+    parser.add_argument(
+        "--devnet-dir",
+        type=Path,
+        default=Path(os.environ.get("LYQUOR_DEVNET_DIR", DEFAULT_DEVNET_DIR)),
+        help=(
+            "Directory containing node1.toml..nodeN.toml for devnet funding "
+            f"(default: {DEFAULT_DEVNET_DIR})."
+        ),
+    )
+    parser.add_argument(
+        "--funding-eth",
+        default=os.environ.get("NODE_FUNDING_ETH", DEFAULT_NODE_FUNDING_ETH),
+        help=(
+            "Minimum ETH balance for each node submitter, funded from node1 "
+            f"(default: {DEFAULT_NODE_FUNDING_ETH})."
+        ),
+    )
+    parser.add_argument(
+        "--anvil-container",
+        help="Anvil container name (default: auto-detect).",
+    )
+    parser.add_argument(
+        "--no-fund-nodes",
+        action="store_true",
+        help="Do not top up node submitter accounts.",
+    )
     return parser.parse_args(argv)
 
 
@@ -446,6 +590,14 @@ def main() -> None:
         node_from_container(index, *containers[index])
         for index in range(1, NODE_COUNT + 1)
     ]
+
+    if not args.no_fund_nodes:
+        fund_nodes(
+            nodes,
+            args.devnet_dir,
+            anvil_container=args.anvil_container,
+            funding_eth=str(args.funding_eth),
+        )
 
     if args.lyquid_id:
         lyquid_id = args.lyquid_id

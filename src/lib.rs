@@ -35,9 +35,7 @@ state! {
     network result_registry: ResultRegistry = ResultRegistry::default();
     network node_registry: NodeRegistry = NodeRegistry::default();
     // Node-local notifications
-    instance pending_searches: Vec<Hash> = Vec::new();
     instance ready_queries: Vec<Hash> = Vec::new();
-    instance processed_searches: HashSet<Hash> = new_hashset();
     // Canonical skill bytes persisted in instance state so the in-memory
     // manager can be rebuilt after the Lyquid VM restarts.
     instance skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
@@ -298,8 +296,8 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         "mead: announcing search {query_id} to {} peers",
         expected_nodes.len()
     );
-    let input = encode_by_fields!(query_id: HashBytes = HashBytes::from(query_id));
-    lyquor_api::universal_procedural_call(
+    let input = encode_by_fields!(query: SearchQuery = query.clone());
+    let response = lyquor_api::universal_procedural_call(
         ctx.lyquid_id,
         None,
         "search_request".into(),
@@ -307,14 +305,40 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         Some(input.into()),
         Some(UPC_ANNOUNCE_TIMEOUT_MS),
     )?;
+    let reply = decode_by_fields!(&response, reply: SearchReply)
+        .ok_or_else(|| invalid_input("search peers returned an invalid reply"))?;
+    lyquid::println!(
+        "mead: initiator received {} peer replies for {query_id}",
+        reply.reply.replies.len()
+    );
+    for peer_reply in reply.reply.replies {
+        submit_peer_result_impl(&mut ctx, peer_reply)?;
+    }
 
     Ok(())
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PeerSearchReply {
+    result: SearchResult,
+    /// Canonical skill bytes for the result's matches, in the same order.
+    skill_bodies: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SearchReply {
+    replies: Vec<PeerSearchReply>,
+}
+
+struct SearchReplyCache {
+    expected: usize,
+    replies: Vec<PeerSearchReply>,
+}
+
 // UPC prepare step: selects the peers that must be notified about this query.
 #[method::instance(upc(prepare))]
-fn search_request(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<NodeID>> {
-    let query_id = Hash::from(query_id);
+fn search_request(ctx: &_, query: SearchQuery) -> LyquidResult<Vec<NodeID>> {
+    let query_id = query.query_id;
     Ok(ctx
         .network
         .query_registry
@@ -323,82 +347,35 @@ fn search_request(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<NodeID>> {
         .unwrap_or_default())
 }
 
-// UPC request step: runs on each selected peer and schedules local processing.
+// UPC request step: runs on each selected peer, searches locally, and returns
+// the peer-signed result to the initiator.
 #[method::instance(upc(request))]
-fn search_request(ctx: &mut _, query_id: HashBytes) -> LyquidResult<bool> {
-    let query_id = Hash::from(query_id);
-
-    let query = ctx
-        .network
-        .query_registry
-        .get(&query_id)
-        .cloned()
-        .ok_or_else(|| invalid_input("query is not registered"))?;
+fn search_request(ctx: &mut _, query: SearchQuery) -> LyquidResult<SearchReply> {
+    let query_id = query.query_id;
+    lyquid::println!("mead: peer {} handling search {query_id}", ctx.node_id);
 
     if query.query_text.is_empty()
         || blake3::hash(query.query_text.as_bytes()) != query.query_digest
     {
-        return Err(invalid_input(
-            "query text does not match the on-chain digest",
-        ));
+        return Err(invalid_input("query text does not match the query digest"));
+    }
+    if !verify::verify_signed(&query) {
+        return Err(invalid_input("query signature is invalid"));
     }
 
-    {
-        let mut pending = ctx.instance.pending_searches.write();
-        if !pending.contains(&query_id) {
-            pending.push(query_id);
-        }
-    }
-    lyquid::println!("mead: peer {} received search {query_id}", ctx.node_id);
-    Ok(true)
-}
+    let blobs = ctx.instance.skill_blobs.read();
+    ensure_skills_loaded_from(&blobs)?;
+    drop(blobs);
 
-// Runs the local BM25 search for an assigned query and submits the result.
-#[method::instance]
-fn process_assigned_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
-    process_assigned_search_impl(&mut ctx, Hash::from(query_id))
-}
-
-fn process_assigned_search_impl(
-    ctx: &mut crate::__lyquid::InstanceContext,
-    query_id: Hash,
-) -> LyquidResult<()> {
-    if ctx.network.query_registry.initiator_node(&query_id) == Some(ctx.node_id) {
-        return Ok(());
-    }
-
-    let assigned = ctx
-        .network
-        .query_registry
-        .expected_nodes(&query_id)
-        .is_some_and(|nodes| nodes.contains(&ctx.node_id));
-    if !assigned || ctx.instance.processed_searches.read().contains(&query_id) {
-        return Ok(());
-    }
-
-    let Some(query) = ctx.network.query_registry.get(&query_id).cloned() else {
-        return Ok(());
-    };
-    let query_text = query.query_text.clone();
-    if query_text.is_empty() {
-        return Ok(());
-    }
-    if blake3::hash(query_text.as_bytes()) != query.query_digest {
-        return Err(invalid_input(
-            "query text does not match the on-chain digest",
-        ));
-    }
-
-    ensure_skills_loaded(ctx)?;
     let skills: Vec<Skill> = match SkillManager::shared() {
         Ok(manager) => manager.iter().map(|(_, skill)| (*skill).clone()).collect(),
         Err(SkillError::NotInitialized) => Vec::new(),
         Err(error) => return Err(invalid_input(error.to_string())),
     };
 
-    let matches = bm25::search(&query_text, query.params.k as usize, &skills);
+    let matches = bm25::search(&query.query_text, query.params.k as usize, &skills);
     lyquid::println!(
-        "mead: peer {} searched {query_id}: {} skills -> {} matches",
+        "mead: peer {} local search {query_id}: {} skills -> {} matches",
         ctx.node_id,
         skills.len(),
         matches.len()
@@ -411,9 +388,118 @@ fn process_assigned_search_impl(
 
     let mut result = SearchResult::new(query_id, matches, timestamp, sender)?;
     let signature = lyquor_api::sign(Bytes::from(result.signing_payload()), Cipher::Ed25519)?;
-    let signature: Vec<u8> = Vec::from(signature.as_ref());
-    result.set_signature(signature);
+    result.set_signature(Vec::from(signature.as_ref()));
 
+    let manager = SkillManager::shared().map_err(|error| invalid_input(error.to_string()))?;
+    let mut skill_bodies = Vec::with_capacity(result.matches.len());
+    for skill_match in &result.matches {
+        let skill = manager
+            .get(&skill_match.skill_digest)
+            .ok_or_else(|| invalid_input("matched skill is not loaded on this node"))?;
+        skill_bodies.push(
+            skill
+                .canonical_bytes()
+                .map_err(|error| invalid_input(error.to_string()))?,
+        );
+    }
+
+    Ok(SearchReply {
+        replies: vec![PeerSearchReply {
+            result,
+            skill_bodies,
+        }],
+    })
+}
+
+// UPC response step: runs on the initiator and submits each peer-signed result
+// as it arrives.
+#[method::instance(upc(response))]
+fn search_request(
+    ctx: &_,
+    response: LyquidResult<SearchReply>,
+) -> LyquidResult<Option<SearchReply>> {
+    let reply = response?;
+    let Some(first) = reply.replies.first() else {
+        return Ok(None);
+    };
+
+    let expected = ctx
+        .network
+        .query_registry
+        .expected_peer_count(&first.result.query_id);
+    let cache = ctx.cache.get_mut_or_init(|| SearchReplyCache {
+        expected,
+        replies: Vec::new(),
+    });
+    cache.replies.extend(reply.replies);
+
+    if cache.replies.len() >= cache.expected {
+        let replies = std::mem::take(&mut cache.replies);
+        Ok(Some(SearchReply { replies }))
+    } else {
+        Ok(None)
+    }
+}
+
+// Submits a peer-signed result through the search oracle. The certificate keeps
+// the peer as the origin, so the signature proves the initiator did not alter it.
+fn submit_peer_result_impl(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    peer_reply: PeerSearchReply,
+) -> LyquidResult<()> {
+    let PeerSearchReply {
+        result,
+        skill_bodies,
+    } = peer_reply;
+    if ctx.network.query_registry.initiator_node(&result.query_id) != Some(ctx.node_id) {
+        return Ok(());
+    }
+    if !verify::verify_signed(&result) {
+        return Err(invalid_input("result signature is invalid"));
+    }
+
+    let query = ctx
+        .network
+        .query_registry
+        .get(&result.query_id)
+        .cloned()
+        .ok_or_else(|| invalid_input("query is not registered"))?;
+    result.validate_against(&query)?;
+    if skill_bodies.len() != result.matches.len() {
+        return Err(invalid_input(
+            "result does not include a body for every matched skill",
+        ));
+    }
+
+    let mut matched_skills = Vec::with_capacity(result.matches.len());
+    for (skill_match, body) in result.matches.iter().zip(skill_bodies.iter()) {
+        let skill =
+            Skill::from_canonical_bytes(body).map_err(|error| invalid_input(error.to_string()))?;
+        let digest = skill
+            .digest()
+            .map_err(|error| invalid_input(error.to_string()))?;
+        if digest != skill_match.skill_digest {
+            return Err(invalid_input("skill body does not match the match digest"));
+        }
+        matched_skills.push(skill);
+    }
+
+    let recomputed: HashMap<Hash, Bm25Score> =
+        bm25::score_corpus(&query.query_text, &matched_skills)
+            .into_iter()
+            .collect();
+    if recomputed.len() != result.matches.len() {
+        return Err(invalid_input("skill corpus does not match the result"));
+    }
+    for skill_match in &result.matches {
+        if recomputed.get(&skill_match.skill_digest) != Some(&skill_match.bm25_score) {
+            return Err(invalid_input(
+                "recomputed BM25 score does not match the result",
+            ));
+        }
+    }
+
+    let sender = result.sender;
     let target = OracleTarget {
         seq_id: lyquor_api::sequence_backend_id()?,
         target: OracleServiceTarget::LVM(ctx.lyquid_id),
@@ -436,13 +522,6 @@ fn process_assigned_search_impl(
         return Err(invalid_input("result certification is unavailable"));
     };
     submit_certified_call!(call)?;
-    lyquid::println!("mead: peer {} submitted result for {query_id}", ctx.node_id);
-
-    ctx.instance.processed_searches.write().insert(query_id);
-    ctx.instance
-        .pending_searches
-        .write()
-        .retain(|pending| *pending != query_id);
     Ok(())
 }
 
@@ -576,19 +655,6 @@ fn check_query_ready(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
     Ok(())
 }
 
-// Returns the queries this node has been asked to process.
-#[method::instance]
-fn get_pending_searches(ctx: &_) -> LyquidResult<Vec<HashBytes>> {
-    Ok(ctx
-        .instance
-        .pending_searches
-        .read()
-        .iter()
-        .copied()
-        .map(HashBytes::from)
-        .collect())
-}
-
 // Returns the queries whose results are complete on the initiating node.
 #[method::instance]
 fn get_ready_queries(ctx: &_) -> LyquidResult<Vec<HashBytes>> {
@@ -600,17 +666,6 @@ fn get_ready_queries(ctx: &_) -> LyquidResult<Vec<HashBytes>> {
         .copied()
         .map(HashBytes::from)
         .collect())
-}
-
-// Removes a handled query from this node's pending list.
-#[method::instance]
-fn ack_pending_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
-    let query_id = Hash::from(query_id);
-    ctx.instance
-        .pending_searches
-        .write()
-        .retain(|pending| *pending != query_id);
-    Ok(())
 }
 
 // Removes a handled query from this node's ready list.
@@ -804,27 +859,6 @@ fn search_get_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Respon
     }
 
     Ok(search_results_response(query_id, &results))
-}
-
-// Processes an assigned query on this peer and submits its result on-chain.
-#[method::instance(export = http, method = "POST", path_prefix = "/search/process")]
-fn search_process_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
-    let query_id = match parse_query_id_request(req.body.as_deref()) {
-        Ok(query_id) => query_id,
-        Err(message) => return Ok(http_json_response(400, &json_error(&message))),
-    };
-
-    match process_assigned_search_impl(&mut ctx, query_id) {
-        Ok(()) => {
-            let body = serde_json::json!({
-                "status": "processed",
-                "query_id": query_id.to_string(),
-            })
-            .to_string();
-            Ok(http_json_response(200, &body))
-        }
-        Err(error) => Ok(http_json_response(500, &json_error(&error.to_string()))),
-    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1064,13 +1098,11 @@ fn parse_uploaded_skill(body: Option<&[u8]>) -> Result<(Skill, String), String> 
 // instance state. The process-wide manager does not survive a Lyquid VM
 // restart, but instance state does.
 fn ensure_skills_loaded(ctx: &mut crate::__lyquid::InstanceContext) -> LyquidResult<()> {
-    let blobs: Vec<(Hash, Vec<u8>)> = ctx
-        .instance
-        .skill_blobs
-        .read()
-        .iter()
-        .map(|(digest, bytes)| (*digest, bytes.clone()))
-        .collect();
+    let blobs = ctx.instance.skill_blobs.read();
+    ensure_skills_loaded_from(&blobs)
+}
+
+fn ensure_skills_loaded_from(blobs: &HashMap<Hash, Vec<u8>>) -> LyquidResult<()> {
     if blobs.is_empty() {
         return Ok(());
     }
@@ -1081,11 +1113,11 @@ fn ensure_skills_loaded(ctx: &mut crate::__lyquid::InstanceContext) -> LyquidRes
     }
     let manager = SkillManager::shared().map_err(|error| invalid_input(error.to_string()))?;
     for (digest, bytes) in blobs {
-        if manager.contains(&digest) {
+        if manager.contains(digest) {
             continue;
         }
-        let skill = Skill::from_canonical_bytes(&bytes)
-            .map_err(|error| invalid_input(error.to_string()))?;
+        let skill =
+            Skill::from_canonical_bytes(bytes).map_err(|error| invalid_input(error.to_string()))?;
         manager
             .append(skill)
             .map_err(|error| invalid_input(error.to_string()))?;

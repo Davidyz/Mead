@@ -16,7 +16,7 @@ use khive_bm25::{DeterministicScore, tokenize};
 use lyquid::prelude::{Hash, HashMap, new_hashmap, new_hashset};
 
 use crate::skill::Skill;
-use crate::types::{MAX_MATCHES, SkillMatch};
+use crate::types::{Bm25Score, MAX_MATCHES, SkillMatch};
 
 /// Term saturation parameter.
 const K1: f64 = 1.2;
@@ -289,6 +289,21 @@ pub fn search(query: &str, top_k: usize, skills: &[Skill]) -> Vec<SkillMatch> {
         })
     });
     matches
+}
+
+/// Scores exactly `skills` as the entire corpus.
+///
+/// This is the corpus used by stage 2 of [`search`], so the returned scores are
+/// the canonical values committed in a [`SkillMatch`].
+pub fn score_corpus(query: &str, skills: &[Skill]) -> Vec<(Hash, Bm25Score)> {
+    let indexed = index_skills(skills);
+    let all: Vec<&IndexedSkill> = indexed.iter().collect();
+    let scores = score(query, &all);
+    indexed
+        .into_iter()
+        .zip(scores)
+        .map(|(skill, score)| (skill.digest, score))
+        .collect()
 }
 
 /// Deduplicates and tokenizes the input skills.

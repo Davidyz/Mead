@@ -236,22 +236,15 @@ fn plan_search_query(
     Ok(())
 }
 
-// Validates and stores a peer result, then records the peer as a responder.
-#[method::network]
-fn submit_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
-    if !verify::verify_signed(&result) {
-        return Err(invalid_input("result signature is invalid"));
-    }
-
-    let network = &mut *ctx.network;
-    record_search_result(
-        &mut *network.query_registry,
-        &mut *network.result_registry,
-        result,
-    )
-}
-
 // Stores a result and triggers completion when every expected peer has answered.
+//
+// This is only reachable through the certified `coordinate_result` entry point,
+// which the initiating node calls after it has independently verified the peer's
+// signature, skill bodies, Merkle root, and recomputed BM25 scores. The chain
+// therefore never records a result that bypassed the initiator's verification.
+// BM25 scores themselves are not chain-verifiable (each peer's corpus is local),
+// so the trust model is "the initiator verifies its peers"; clients trust the
+// initiator that ran the search. See `submit_peer_result_impl` for the checks.
 fn record_search_result(
     query_registry: &mut QueryRegistry,
     result_registry: &mut ResultRegistry,
@@ -481,8 +474,12 @@ fn search_request(
     }
 }
 
-// Submits a peer-signed result through the search oracle. The certificate keeps
-// the peer as the origin, so the signature proves the initiator did not alter it.
+// Verifies a peer-signed result and submits it through the search oracle.
+//
+// The certificate is issued to this initiator, not the peer: it authorizes this
+// node to record the result. Authenticity still comes from the peer's own Ed25519
+// signature over the result, so a certificate cannot forge or alter it. Every
+// result reaching `coordinate_result` has passed these local checks first.
 fn submit_peer_result_impl(
     ctx: &mut crate::__lyquid::InstanceContext,
     peer_reply: PeerSearchReply,
@@ -583,6 +580,11 @@ fn coordinate_search(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
 }
 
 // Accepts a certified peer result and records it on-chain.
+//
+// This is the only way a result enters the result registry. The submitting node
+// certifies the call only after `submit_peer_result_impl` has verified the peer's
+// signature, the transmitted skill bodies, the Merkle root, and the recomputed
+// BM25 scores, so unverified results cannot be injected into consensus state.
 #[method::network(group = oracle::certified::search)]
 fn coordinate_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
     if !verify::verify_signed(&result) {

@@ -14,7 +14,7 @@ mod api;
 
 use api::skills::{
     ensure_skills_loaded, ensure_skills_loaded_from, ensure_skills_loaded_immutable,
-    handle_skill_upload, skill_count_response, skill_list_json,
+    handle_skill_get, handle_skill_upload, skill_count_response, skill_list_json,
 };
 use api::{
     PeerSearchReply, SearchReply, SearchReplyCache, parse_query_id_request,
@@ -23,7 +23,7 @@ use api::{
 };
 use api::{http_json_response, json_error};
 
-use skill::{Skill, SkillError, SkillManager};
+use skill::{AcquiredSkills, Skill, SkillError, SkillManager};
 use types::invalid_input;
 use types::{
     Bm25Score, CanonicalBytes, NodeRegistry, QueryParams, QueryRegistry, ResultRegistry,
@@ -722,6 +722,9 @@ fn submit_peer_result_impl(
         if digest != skill_match.skill_digest {
             return Err(invalid_input("skill body does not match the match digest"));
         }
+        // Cache verified peer bodies so `/skills/get` can serve them after the
+        // search. They stay out of the local BM25 corpus.
+        AcquiredSkills::shared().record(digest, skill.clone());
         matched_skills.push(skill);
     }
 
@@ -1257,6 +1260,20 @@ fn list_skills(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response>
         Err(error) => return Ok(http_json_response(500, &json_error(&error.to_string()))),
     };
     Ok(http_json_response(200, &body))
+}
+
+// Returns the full body of a skill by digest.
+//
+// `GET /skills/get?digest=<hex>`
+//
+// The digest is the `skill_digest` / `digest` value returned by search and
+// `/skills/list`. Peer skills are served from the process-wide cache populated
+// when their bodies arrive during a search UPC; locally uploaded skills fall
+// back to this node's catalog. The response body is the same JSON skill
+// structure accepted by `POST /skills/upload`.
+#[method::instance(export = http, method = "GET", path_prefix = "/skills/get")]
+fn get_skill_at_skills_get(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
+    handle_skill_get(&mut ctx, &req)
 }
 
 // Accepts a single JSON skill object, validates it, and registers it with the

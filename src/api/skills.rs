@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use lyquid::prelude::*;
 
-use crate::skill::{Skill, SkillError, SkillManager};
-use crate::types::invalid_input;
+use crate::skill::{AcquiredSkills, Skill, SkillError, SkillManager};
+use crate::types::{invalid_input, parse_hash};
 
 use super::http::{http_json_response, json_error};
 
@@ -34,6 +34,55 @@ pub(crate) fn skill_list_json(manager: &SkillManager) -> String {
         })
         .collect();
     serde_json::json!(skills).to_string()
+}
+
+/// Extracts the `digest` query parameter from a `/skills/get` URL.
+pub(crate) fn parse_skill_get_digest(url: &str) -> Result<Hash, String> {
+    let query = url
+        .split_once('?')
+        .map(|(_, query)| query)
+        .unwrap_or_default();
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == "digest" {
+            if value.is_empty() {
+                return Err("digest query parameter must not be empty".to_owned());
+            }
+            return parse_hash(value).map_err(|error| format!("invalid digest: {error}"));
+        }
+    }
+    Err("digest query parameter is required".to_owned())
+}
+
+/// Serves the full body of a skill by digest.
+///
+/// Peer-provided skills are served from the process-wide cache populated when
+/// their bodies arrive during a search UPC. Locally uploaded skills fall back to
+/// the node-local catalog. The body uses the same JSON skill structure accepted
+/// by `POST /skills/upload`.
+pub(crate) fn handle_skill_get(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    req: &http::Request,
+) -> LyquidResult<http::Response> {
+    let digest = match parse_skill_get_digest(&req.url) {
+        Ok(digest) => digest,
+        Err(message) => return Ok(http_json_response(400, &json_error(&message))),
+    };
+
+    ensure_skills_loaded(ctx)?;
+
+    let acquired = AcquiredSkills::shared().get(&digest);
+    let local = SkillManager::shared()
+        .ok()
+        .and_then(|manager| manager.get(&digest));
+    let Some(skill) = acquired.or(local) else {
+        return Ok(http_json_response(404, &json_error("skill not found")));
+    };
+
+    match skill.to_json() {
+        Ok(body) => Ok(http_json_response(200, &body)),
+        Err(error) => Ok(http_json_response(500, &json_error(&error.to_string()))),
+    }
 }
 
 pub(crate) fn handle_skill_upload(

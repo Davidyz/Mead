@@ -115,11 +115,13 @@ def test_activate_oracle_is_idempotent(devnet: dict[str, Any]) -> None:
     try:
         first = manager.activate_oracle()
         second = manager.activate_oracle()
+        if "activating" in {first.status, second.status}:
+            manager.ensure_oracle_active(activate=True, timeout=30.0, poll_interval=0.5)
     except httpx.TransportError as error:
         pytest.skip(f"devnet is not available: {error}")
 
-    assert first.status == "active"
-    assert second.status == "active"
+    assert first.status in {"active", "activating"}
+    assert second.status in {"active", "activating"}
 
 
 def test_register_node_is_idempotent(devnet: dict[str, Any]) -> None:
@@ -128,7 +130,7 @@ def test_register_node_is_idempotent(devnet: dict[str, Any]) -> None:
     try:
         first = manager.register_node()
         second = manager.register_node()
-        nodes = manager.list_nodes()
+        nodes = manager.ensure_registered(timeout=30.0, poll_interval=0.5)
     except httpx.TransportError as error:
         pytest.skip(f"devnet is not available: {error}")
 
@@ -275,3 +277,64 @@ def test_ensure_oracle_active_polls_before_reposting(
 
     assert result.active is True
     assert calls["activate"] == 1
+
+
+def _offline_manager(tmp_path: Path) -> NodeManager:
+    return NodeManager(
+        CLIArgs(
+            server_url="http://127.0.0.1:1",
+            skill_dir=tmp_path,
+            node_id="Node-example",
+            lyquid_id="Lyquid-example",
+        )
+    )
+
+
+def test_ensure_oracle_active_times_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _offline_manager(tmp_path)
+    monkeypatch.setattr(
+        manager, "get_oracle_status", lambda: OracleStatus(False, 0, False, 0)
+    )
+    monkeypatch.setattr(
+        manager, "activate_oracle", lambda: ActivationResponse("activating", 0)
+    )
+
+    with pytest.raises(RuntimeError, match="did not become active"):
+        manager.ensure_oracle_active(activate=True, timeout=0.05, poll_interval=0.01)
+
+
+def test_ensure_oracle_active_surfaces_not_staged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _offline_manager(tmp_path)
+    request = httpx.Request("POST", "http://test")
+    response = httpx.Response(503, json={"status": "not_staged"}, request=request)
+    error = httpx.HTTPStatusError("not staged", request=request, response=response)
+    monkeypatch.setattr(
+        manager, "get_oracle_status", lambda: OracleStatus(False, 0, False, 0)
+    )
+
+    def activate_oracle() -> ActivationResponse:
+        raise error
+
+    monkeypatch.setattr(manager, "activate_oracle", activate_oracle)
+
+    with pytest.raises(RuntimeError, match="not staged"):
+        manager.ensure_oracle_active(activate=True, timeout=1.0, poll_interval=0.01)
+
+
+def test_ensure_registered_times_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _offline_manager(tmp_path)
+    monkeypatch.setattr(manager, "list_nodes", list)
+    monkeypatch.setattr(
+        manager,
+        "register_node",
+        lambda: NodeRegistrationResponse(status="submitted"),
+    )
+
+    with pytest.raises(RuntimeError, match="was not registered"):
+        manager.ensure_registered(timeout=0.05, poll_interval=0.01)

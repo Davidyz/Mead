@@ -149,9 +149,22 @@ fn submit_node_registry_change(
 
 // Registers this node in Mead's node registry.
 //
-// The endpoint is instance-only so it can use the node's own `node_id`. It
-// requires an active search oracle (the constructor stages the committee and
-// the setup script activates it). Repeated calls are safe.
+// `POST /nodes/register`
+//
+// No request body is required. The endpoint certifies and submits
+// `register_node(ctx.node_id)` for the node hosting this endpoint. It requires
+// an active search oracle, and repeated calls are safe.
+//
+// Response - `202 Accepted`:
+// {
+//   "status": "submitted",
+//   "method": "register_node",
+//   "node_id": "Node-..."
+// }
+//
+// Errors:
+// - `502`: submitting the certified call failed.
+// - `503`: search certification is unavailable.
 #[method::instance(export = http, method = "POST", path_prefix = "/nodes/register")]
 fn register_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
     let node = ctx.node_id;
@@ -159,6 +172,22 @@ fn register_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http
 }
 
 // Removes this node from Mead's node registry.
+//
+// `POST /nodes/unregister`
+//
+// No request body is required. The endpoint certifies and submits
+// `unregister_node(ctx.node_id)` for the node hosting this endpoint.
+//
+// Response - `202 Accepted`:
+// {
+//   "status": "submitted",
+//   "method": "unregister_node",
+//   "node_id": "Node-..."
+// }
+//
+// Errors:
+// - `502`: submitting the certified call failed.
+// - `503`: search certification is unavailable.
 #[method::instance(export = http, method = "POST", path_prefix = "/nodes/unregister")]
 fn unregister_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
     let node = ctx.node_id;
@@ -166,6 +195,13 @@ fn unregister_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<ht
 }
 
 // Lists the node identities currently registered on-chain.
+//
+// `GET /nodes/list`
+//
+// Response - `200 OK`:
+// {
+//   "nodes": ["Node-...", "Node-..."]
+// }
 #[method::instance(export = http, method = "GET", path_prefix = "/nodes/list")]
 fn list_registered_nodes(ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
     let mut nodes: Vec<NodeID> = ctx.network.node_registry.nodes().iter().copied().collect();
@@ -763,9 +799,33 @@ fn get_skill_count(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Respo
 
 // Creates a new search query from this node.
 //
+// `POST /search/new`
+//
 // The endpoint builds and signs a `SearchQuery` from the node's own identity,
 // then submits a certified call to the search oracle. The certified network
 // method registers the query and triggers the peer-coordination UPC.
+//
+// Request:
+// ```json
+// { "query": "rust async", "k": 5 }
+// ```
+// - `query` (string, required): search keywords.
+// - `k` (number, optional): results per peer. Defaults to `10`. Must be within
+//   the supported bounds.
+//
+// Response - `202 Accepted`:
+// ```json
+// {
+//   "status": "submitted",
+//   "query_id": "8c62da8117dd88322d28cb4fb59b561007e3109476938e071732fee5f25bf399"
+// }
+// ```
+//
+// Errors:
+// - `400`: missing/invalid JSON, empty query, or invalid `k`.
+// - `500`: certification failed unexpectedly.
+// - `502`: submitting the certified call failed.
+// - `503`: search certification is unavailable (search oracle not configured).
 #[method::instance(export = http, method = "POST", path_prefix = "/search/new")]
 fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
     let request = match parse_search_endpoint_request(req.body.as_deref()) {
@@ -830,6 +890,34 @@ fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Re
 }
 
 // Reports whether a search has completed and how many peer results arrived.
+//
+// `POST /search/status`
+//
+// Request:
+// ```json
+// { "query_id": "8c62da8117dd88322d28cb4fb59b561007e3109476938e071732fee5f25bf399" }
+// ```
+//
+// Response - `200 OK`:
+// ```json
+// {
+//   "status": "pending",
+//   "query_id": "8c62da8117dd88322d28cb4fb59b561007e3109476938e071732fee5f25bf399",
+//   "completed": false,
+//   "timed_out": false,
+//   "received_results": 2,
+//   "expected_results": 4
+// }
+// ```
+// - `status`: `"pending"` or `"completed"`.
+// - `timed_out`: `true` when the response deadline passed with fewer results
+//   than expected.
+// - `received_results`: number of results submitted for this query.
+// - `expected_results`: number of peers expected to respond.
+//
+// Errors:
+// - `400`: missing/invalid JSON or malformed query ID.
+// - `404`: query ID is not registered.
 #[method::instance(export = http, method = "POST", path_prefix = "/search/status")]
 fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Response> {
     let query_id = match parse_query_id_request(req.body.as_deref()) {
@@ -865,9 +953,52 @@ fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Res
 
 // Returns the peer results for a completed search query.
 //
+// `POST /search/get`
+//
 // On the initiating node the response also includes a locally computed result,
 // so the initiator contributes its own matches. Any other node serves only the
 // on-chain peer results and does not run a query it did not start.
+//
+// Request:
+// ```json
+// { "query_id": "8c62da8117dd88322d28cb4fb59b561007e3109476938e071732fee5f25bf399" }
+// ```
+//
+// Response - `200 OK`:
+// ```json
+// {
+//   "status": "completed",
+//   "query_id": "8c62da8117dd88322d28cb4fb59b561007e3109476938e071732fee5f25bf399",
+//   "completed": true,
+//   "timed_out": false,
+//   "verified_results": 3,
+//   "rejected_results": 0,
+//   "results": [],
+//   "aggregated": [
+//     { "skill_digest": "0x51bd...", "bm25_score": 1231569101 }
+//   ]
+// }
+// ```
+// Each entry in `results` is a `SearchResult` containing the submitting peer's
+// `NodeID`, matches, BM25 scores, Merkle root, timestamp, and signature.
+// `aggregated` deduplicates matches by skill digest, keeping the best BM25 score
+// per skill and ordering by descending score then digest.
+//
+// Pending response - `409 Conflict`:
+// ```json
+// {
+//   "status": "pending",
+//   "query_id": "8c62da8117dd88322d28cb4fb59b561007e3109476938e071732fee5f25bf399",
+//   "completed": false,
+//   "received_results": 1,
+//   "expected_results": 3,
+//   "results": []
+// }
+// ```
+//
+// Errors:
+// - `400`: missing/invalid JSON or malformed query ID.
+// - `404`: query ID is not registered.
 #[method::instance(export = http, method = "POST", path_prefix = "/search/get")]
 fn search_get_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Response> {
     let query_id = match parse_query_id_request(req.body.as_deref()) {

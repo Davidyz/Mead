@@ -33,12 +33,6 @@ use types::{
 /// Maximum time the initiating node waits for a UPC acknowledgement.
 const UPC_ANNOUNCE_TIMEOUT_MS: u64 = 10_000;
 
-/// Delay between delayed search-oracle activation retries.
-const ORACLE_ACTIVATION_RETRY_MS: u64 = 1_000;
-
-/// Maximum number of delayed activation retries after the initial request.
-const ORACLE_ACTIVATION_MAX_RETRIES: u32 = 60;
-
 mod bm25;
 
 pub use bm25::search;
@@ -136,19 +130,20 @@ fn submit_search_oracle_finalize(
 // that round. It is idempotent: an already-active oracle returns 200
 // immediately and submits no calls.
 //
-// The certified epoch calls execute asynchronously, so this returns `202` while
-// delayed retries finish activation. Poll `GET /oracle/status` until `active` is
-// true, or call this endpoint again (it re-checks before doing work).
+// The certified epoch calls execute asynchronously, so this returns `202` until
+// they settle. Poll this endpoint (or `GET /oracle/status`) until `200`; each
+// call submits only the work that is still needed.
 //
-// Response - `200 OK` (already active or active by the time the round returned):
+// Response - `200 OK` (already active or fully active by the time the call
+// returned):
 // { "status": "active", "epoch": 1, "attempt": 0 }
 //
-// Response - `202 Accepted` (activation in progress):
+// Response - `202 Accepted` (activation in progress; retry):
 // { "status": "activating", "epoch": 0, "attempt": 0 }
 //
 // Errors:
 // - `502`: submitting the certified epoch advance failed.
-// - `503`: the oracle is not staged, or a previous activation timed out.
+// - `503`: the oracle is not staged.
 #[method::instance(export = http, method = "POST", path_prefix = "/oracle/activate")]
 fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
     let target = search_oracle_target(ctx.lyquid_id)?;
@@ -173,7 +168,7 @@ fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http
     if epoch > 0 {
         // Certification needs the source-side config. A non-empty current
         // committee means the source has adopted the target epoch; otherwise
-        // submit the finalize certificate and let the retry chain observe it.
+        // submit the finalize certificate and let the caller poll again.
         let source_active = !ctx
             .network
             .search
@@ -186,45 +181,7 @@ fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http
         submit_search_oracle_finalize(&mut ctx, target)?;
     }
 
-    let _ = trigger!(
-        activate_search_oracle_retry(attempt: u32 = 1),
-        TriggerMode::Once(ORACLE_ACTIVATION_RETRY_MS)
-    );
     Ok(oracle_activation_response(202, "activating", epoch, 0))
-}
-
-// Delayed retry for search-oracle activation.
-//
-// Advances are only submitted once, by the initial `/oracle/activate` call.
-// Retries finalize the epoch and re-check the destination until it is active or
-// the bounded attempt budget is exhausted.
-#[method::instance]
-fn activate_search_oracle_retry(ctx: &mut _, attempt: u32) -> LyquidResult<()> {
-    let target = search_oracle_target(ctx.lyquid_id)?;
-
-    let epoch = search_oracle_epoch(target)?;
-    if epoch > 0 {
-        let source_active = !ctx
-            .network
-            .search
-            .config_current(&ctx, target)
-            .committee
-            .is_empty();
-        if source_active {
-            return Ok(());
-        }
-        submit_search_oracle_finalize(&mut ctx, target)?;
-    }
-
-    if attempt < ORACLE_ACTIVATION_MAX_RETRIES {
-        let _ = trigger!(
-            activate_search_oracle_retry(attempt: u32 = attempt + 1),
-            TriggerMode::Once(ORACLE_ACTIVATION_RETRY_MS)
-        );
-    } else {
-        lyquid::println!("mead: search oracle activation gave up after {attempt} retries");
-    }
-    Ok(())
 }
 
 // Reports whether the search oracle is active.

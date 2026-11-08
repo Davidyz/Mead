@@ -38,11 +38,13 @@ impl AcquiredSkills {
 
     /// Records a verified skill body under its digest.
     ///
-    /// Duplicate digests keep the first body. The digest must already match the
-    /// body; callers verify that before recording.
-    pub(crate) fn record(&self, digest: Hash, skill: Skill) {
+    /// Duplicate digests keep the first body without cloning the new one. The
+    /// digest must already match the body; callers verify that before recording.
+    pub(crate) fn record(&self, digest: Hash, skill: &Skill) {
         let mut skills = self.write_skills();
-        skills.entry(digest).or_insert_with(|| Arc::new(skill));
+        skills
+            .entry(digest)
+            .or_insert_with(|| Arc::new(skill.clone()));
     }
 
     /// Returns a cached skill by digest.
@@ -86,7 +88,7 @@ mod tests {
         let skill = load_doc_coauthoring();
         let digest = skill.digest().unwrap();
 
-        cache.record(digest, skill.clone());
+        cache.record(digest, &skill);
 
         assert_eq!(cache.len(), 1);
         assert!(!cache.is_empty());
@@ -100,8 +102,8 @@ mod tests {
         let skill = load_doc_coauthoring();
         let digest = skill.digest().unwrap();
 
-        cache.record(digest, skill.clone());
-        cache.record(digest, skill.clone());
+        cache.record(digest, &skill);
+        cache.record(digest, &skill);
 
         assert_eq!(cache.len(), 1);
     }

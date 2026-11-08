@@ -746,7 +746,7 @@ fn submit_peer_result_impl(
     // replies cannot populate `/skills/get`. They stay out of the local BM25
     // corpus.
     for (digest, skill) in matched_digests.iter().zip(matched_skills.iter()) {
-        AcquiredSkills::shared().record(*digest, skill.clone());
+        AcquiredSkills::shared().record(*digest, skill);
     }
 
     let target = OracleTarget {

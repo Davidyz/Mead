@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -373,6 +374,51 @@ def test_search_skills_polls_status_and_maps_matches(
     summaries = manager.search_skills("demo", top_k=3, timeout=1.0, poll_interval=0.01)
 
     assert summaries == [SkillSummary("demo", "A demo skill", "0xabc")]
+
+
+def test_search_skills_skips_unresolved_skill_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = _offline_manager(tmp_path)
+    skill = Skill.from_manifest(
+        {"name": "demo", "description": "A demo skill"}, "Use it."
+    )
+    request = httpx.Request("POST", "http://test")
+    response = httpx.Response(404, json={"error": "skill not found"}, request=request)
+    error = httpx.HTTPStatusError("skill not found", request=request, response=response)
+
+    def get_skill(digest: str) -> Skill:
+        if digest == "0xmissing":
+            raise error
+        return skill
+
+    monkeypatch.setattr(manager, "start_search", lambda query, top_k: "qid")
+    monkeypatch.setattr(
+        manager,
+        "get_search_status",
+        lambda query_id: SearchStatus("qid", "completed", True, False, 2, 2),
+    )
+    monkeypatch.setattr(
+        manager,
+        "get_search_results",
+        lambda query_id: SearchResults(
+            "qid",
+            True,
+            False,
+            2,
+            0,
+            [SearchMatch("0xabc", 10), SearchMatch("0xmissing", 5)],
+        ),
+    )
+    monkeypatch.setattr(manager, "get_skill", get_skill)
+    caplog.set_level(logging.WARNING)
+
+    summaries = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
+
+    assert summaries == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert "0xmissing" in caplog.text
 
 
 def test_search_skills_retries_until_the_query_registers(

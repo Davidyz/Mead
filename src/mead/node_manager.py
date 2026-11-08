@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -7,6 +8,8 @@ import httpx
 
 from .skills import Skill
 from .utils import CLIArgs
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -379,14 +382,28 @@ class NodeManager:
 
         results = self.get_search_results(query_id)
         summaries: list[SkillSummary] = []
+        unresolved: list[str] = []
         for match in results.aggregated:
-            skill = self.get_skill(match.skill_digest)
+            try:
+                skill = self.get_skill(match.skill_digest)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 404:
+                    raise
+                unresolved.append(match.skill_digest)
+                continue
             summaries.append(
                 SkillSummary(
                     name=skill.name,
                     description=skill.description,
                     digest=match.skill_digest,
                 )
+            )
+        if unresolved:
+            logger.warning(
+                "search %s: %d aggregated skill body(s) were unavailable: %s",
+                query_id,
+                len(unresolved),
+                ", ".join(unresolved),
             )
         return summaries
 

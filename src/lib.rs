@@ -713,6 +713,7 @@ fn submit_peer_result_impl(
     }
 
     let mut matched_skills = Vec::with_capacity(result.matches.len());
+    let mut matched_digests = Vec::with_capacity(result.matches.len());
     for (skill_match, body) in result.matches.iter().zip(skill_bodies.iter()) {
         let skill =
             Skill::from_canonical_bytes(body).map_err(|error| invalid_input(error.to_string()))?;
@@ -722,9 +723,7 @@ fn submit_peer_result_impl(
         if digest != skill_match.skill_digest {
             return Err(invalid_input("skill body does not match the match digest"));
         }
-        // Cache verified peer bodies so `/skills/get` can serve them after the
-        // search. They stay out of the local BM25 corpus.
-        AcquiredSkills::shared().record(digest, skill.clone());
+        matched_digests.push(digest);
         matched_skills.push(skill);
     }
 
@@ -741,6 +740,13 @@ fn submit_peer_result_impl(
                 "recomputed BM25 score does not match the result",
             ));
         }
+    }
+
+    // Cache peer bodies only after every verification step passes, so rejected
+    // replies cannot populate `/skills/get`. They stay out of the local BM25
+    // corpus.
+    for (digest, skill) in matched_digests.iter().zip(matched_skills.iter()) {
+        AcquiredSkills::shared().record(*digest, skill.clone());
     }
 
     let target = OracleTarget {

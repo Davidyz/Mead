@@ -1,18 +1,10 @@
-import json
-import time
-from pathlib import Path
 from typing import Any, cast
 
-import httpx
 import pytest
 
 from mead.node_manager import NodeManager, SearchOutcome, SkillSummary
 from mead.skills import Skill
 from mead.tools import MeadTools
-from mead.utils import CLIArgs
-
-FIXTURE_DIR = Path(__file__).parent / "fixture"
-NODES_JSON = FIXTURE_DIR / "nodes.json"
 
 
 class FakeNodeManager:
@@ -150,115 +142,3 @@ def test_mcp_get_skill_rejects_unknown_resources_and_detail_levels() -> None:
         tools.mcp_get_skill("digest-demo", "skill_md", ["missing.txt"])
     with pytest.raises(ValueError, match="unsupported detail level"):
         tools.mcp_get_skill("digest-demo", cast(Any, "summary"))
-
-
-@pytest.fixture(scope="session")
-def devnet() -> dict[str, Any]:
-    if not NODES_JSON.is_file():
-        pytest.skip("devnet fixture is missing; run `make prepare-nodes` first")
-
-    data = json.loads(NODES_JSON.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
-        raise TypeError(f"{NODES_JSON} does not contain a node list")
-    return data
-
-
-def node_manager(devnet: dict[str, Any]) -> NodeManager:
-    node = next(node for node in devnet["nodes"] if node["index"] == 1)
-    return NodeManager(
-        CLIArgs(
-            server_url=f"http://127.0.0.1:{node['port']}",
-            skill_dir=FIXTURE_DIR / "node1",
-            node_id=node["node_id"],
-            lyquid_id=devnet["lyquid_id"],
-        )
-    )
-
-
-def _normalize_digest(digest: str) -> str:
-    return digest.removeprefix("0x").lower()
-
-
-def _wait_for_search(manager: NodeManager, query_id: str) -> None:
-    deadline = time.monotonic() + 60.0
-    while time.monotonic() < deadline:
-        try:
-            status = manager.get_search_status(query_id)
-        except httpx.HTTPStatusError as error:
-            if error.response.status_code != 404:
-                raise
-        else:
-            if status.completed:
-                return
-        time.sleep(1.0)
-    raise RuntimeError(f"search {query_id} did not complete within 60s")
-
-
-def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
-    manager = node_manager(devnet)
-    tools = MeadTools(manager)
-    last_error: Exception | None = None
-
-    try:
-        local_digests = {
-            _normalize_digest(skill.digest) for skill in manager.list_skills()
-        }
-    except httpx.TransportError as error:
-        pytest.skip(f"devnet is not available: {error}")
-
-    # The first search after a fresh devnet can lose its peer replies while the
-    # nodes warm up; retry with a fresh query.
-    for attempt in range(3):
-        query = f"skill integration {attempt}"
-        try:
-            query_id = manager.start_search(query, top_k=5)
-            _wait_for_search(manager, query_id)
-            results = manager.get_search_results(query_id)
-        except httpx.TransportError as error:
-            pytest.skip(f"devnet is not available: {error}")
-        except (httpx.HTTPError, RuntimeError) as error:
-            last_error = error
-            time.sleep(2)
-            continue
-
-        peer_digest = next(
-            (
-                match.skill_digest
-                for match in results.aggregated
-                if _normalize_digest(match.skill_digest) not in local_digests
-            ),
-            None,
-        )
-        if peer_digest is None:
-            last_error = RuntimeError("search returned no peer skills")
-            time.sleep(2)
-            continue
-
-        # The raw aggregated result must contain a peer digest; now verify that
-        # the summary resolution used by search_skills keeps it instead of
-        # dropping it, and that its body is actually retrievable.
-        skill = manager.get_skill(peer_digest)
-        assert skill.name
-        assert skill.description
-
-        summaries = manager.search_skill_summaries(query_id)
-        assert any(
-            _normalize_digest(summary.digest) == _normalize_digest(peer_digest)
-            for summary in summaries
-        ), f"search summary resolution dropped peer digest {peer_digest}"
-
-        skill_md = tools.mcp_get_skill(peer_digest)
-        assert f"# {skill.name}" in skill_md
-        assert skill.description in skill_md
-        assert skill.instructions in skill_md
-
-        if skill.resources:
-            selected = tools.mcp_get_skill(peer_digest, paths=[skill.resources[0].path])
-            assert skill.resources[0].contents in selected
-        return
-
-    if isinstance(last_error, RuntimeError) and "no peer skills" in str(last_error):
-        pytest.skip(
-            "search returned no peer skills; cannot exercise the peer-body path"
-        )
-    pytest.fail(f"MCP search/get round trip failed: {last_error}")

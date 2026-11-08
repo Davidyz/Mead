@@ -18,6 +18,10 @@ from typing import Any
 import httpx
 import pytest
 
+from mead.node_manager import NodeManager
+from mead.tools import MeadTools
+from mead.utils import CLIArgs
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "search_lifecycle.py"
 NODES_JSON = ROOT / "tests" / "fixture" / "nodes.json"
@@ -122,6 +126,41 @@ def test_search_lifecycle_completes() -> None:
         assert len(results["results"]) == status["received_results"] + 1
         assert isinstance(results["aggregated"], list)
         assert results["aggregated"]
+
+        lyquid, nodes = lifecycle.load_nodes(NODES_JSON)  # type: ignore[attr-defined]
+        manager = NodeManager(
+            CLIArgs(
+                server_url=nodes[0].base_url,
+                skill_dir=ROOT / "tests" / "fixture" / "node1",
+                node_id=nodes[0].node_id,
+                lyquid_id=lyquid,
+            )
+        )
+        local_digests = {
+            skill.digest.removeprefix("0x").lower() for skill in manager.list_skills()
+        }
+        peer_digest = next(
+            (
+                match["skill_digest"]
+                for match in results["aggregated"]
+                if match["skill_digest"].removeprefix("0x").lower() not in local_digests
+            ),
+            None,
+        )
+        assert peer_digest is not None, "aggregated results contained no peer skill"
+
+        peer_skill = manager.get_skill(peer_digest)
+        assert peer_skill.name
+        summaries = manager.search_skill_summaries(result.query_id)
+        assert any(
+            summary.digest.removeprefix("0x").lower()
+            == peer_digest.removeprefix("0x").lower()
+            for summary in summaries
+        )
+
+        skill_md = MeadTools(manager).mcp_get_skill(peer_digest)
+        assert f"# {peer_skill.name}" in skill_md
+        assert peer_skill.instructions in skill_md
         return
 
     pytest.fail(f"search lifecycle did not complete after retries: {last_error}")

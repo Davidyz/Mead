@@ -1,9 +1,5 @@
 import glob
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal
-
-lazy from mcp.server import MCPServer
 
 from .skill import Skill
 
@@ -43,63 +39,3 @@ class SkillManager:
             if skill.name == name or skill.id == name:
                 return skill
         return None
-
-    # === MCP-related methods ===
-    def mcp_list_skill(self) -> list[dict[str, str]]:
-        """List every skill name with its description."""
-        return [
-            {"name": skill.name, "description": skill.description}
-            for skill in sorted(
-                self._skills.values(),
-                key=lambda item: (item.name, item.canonical_key()),
-            )
-        ]
-
-    def mcp_get_skill(
-        self,
-        name: str,
-        detail: Literal["description", "full"],
-        paths: Iterable[str] | None = None,
-    ) -> str:
-        """Return a skill for an LLM agent, optionally including its files.
-
-        ``detail="description"`` exposes only the description. ``detail="full"``
-        exposes the instructions and the requested resource contents. Passing
-        ``paths=None`` includes every resource; pass a subset to limit exposure.
-        """
-
-        skill = next(
-            (
-                candidate
-                for candidate in self._skills.values()
-                if candidate.name == name or candidate.id == name
-            ),
-            None,
-        )
-        if skill is None:
-            raise ValueError(f"Could not find a skill named {name}")
-
-        if detail == "description":
-            return skill.description
-
-        resources = {resource.path: resource for resource in skill.resources}
-        selected = sorted(resources) if paths is None else list(dict.fromkeys(paths))
-        missing = [path for path in selected if path not in resources]
-        if missing:
-            raise ValueError(
-                f"Skill {name} does not contain resources: {', '.join(missing)}"
-            )
-
-        sections = [f"# {skill.name}", skill.description, skill.instructions]
-        if resources:
-            sections.append("## Available resources")
-            sections.extend(f"- {path}" for path in sorted(resources))
-        for path in selected:
-            sections.append(f"## Resource: {path}\n\n{resources[path].contents}")
-        return "\n\n".join(sections)
-
-    def make_mcp_server(self) -> MCPServer:
-        mcp_server = MCPServer("mead")
-        mcp_server.add_tool(self.mcp_list_skill, name="list_skill")
-        mcp_server.add_tool(self.mcp_get_skill, name="get_skill")
-        return mcp_server

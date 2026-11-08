@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,6 +11,9 @@ from mead.node_manager import (
     NodeManager,
     NodeRegistrationResponse,
     OracleStatus,
+    SearchMatch,
+    SearchResults,
+    SearchStatus,
     SkillSummary,
     UploadSkillResponse,
     _sleep_until,
@@ -338,6 +342,145 @@ def test_ensure_registered_times_out(
 
     with pytest.raises(RuntimeError, match="was not registered"):
         manager.ensure_registered(timeout=0.05, poll_interval=0.01)
+
+
+def test_search_skills_polls_status_and_maps_matches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _offline_manager(tmp_path)
+    statuses = [
+        SearchStatus("qid", "pending", False, False, 1, 3),
+        SearchStatus("qid", "completed", True, False, 3, 3),
+    ]
+    skill = Skill.from_manifest(
+        {"name": "demo", "description": "A demo skill"}, "Use it."
+    )
+    monkeypatch.setattr(manager, "start_search", lambda query, top_k: "qid")
+    monkeypatch.setattr(manager, "get_search_status", lambda query_id: statuses.pop(0))
+    monkeypatch.setattr(
+        manager,
+        "get_search_results",
+        lambda query_id: SearchResults(
+            query_id="qid",
+            completed=True,
+            timed_out=False,
+            verified_results=3,
+            rejected_results=0,
+            aggregated=[SearchMatch("0xabc", 42)],
+        ),
+    )
+    monkeypatch.setattr(manager, "get_skill", lambda digest: skill)
+
+    outcome = manager.search_skills("demo", top_k=3, timeout=1.0, poll_interval=0.01)
+
+    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.timed_out is False
+    assert outcome.received_results == 3
+    assert outcome.expected_results == 3
+    assert outcome.verified_results == 3
+    assert outcome.rejected_results == 0
+    assert outcome.unresolved_digests == []
+
+
+def test_search_skills_skips_unresolved_skill_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = _offline_manager(tmp_path)
+    skill = Skill.from_manifest(
+        {"name": "demo", "description": "A demo skill"}, "Use it."
+    )
+    request = httpx.Request("POST", "http://test")
+    response = httpx.Response(404, json={"error": "skill not found"}, request=request)
+    error = httpx.HTTPStatusError("skill not found", request=request, response=response)
+
+    def get_skill(digest: str) -> Skill:
+        if digest == "0xmissing":
+            raise error
+        return skill
+
+    monkeypatch.setattr(manager, "start_search", lambda query, top_k: "qid")
+    monkeypatch.setattr(
+        manager,
+        "get_search_status",
+        lambda query_id: SearchStatus("qid", "completed", True, False, 2, 2),
+    )
+    monkeypatch.setattr(
+        manager,
+        "get_search_results",
+        lambda query_id: SearchResults(
+            "qid",
+            True,
+            False,
+            2,
+            0,
+            [SearchMatch("0xabc", 10), SearchMatch("0xmissing", 5)],
+        ),
+    )
+    monkeypatch.setattr(manager, "get_skill", get_skill)
+    caplog.set_level(logging.WARNING)
+
+    outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
+
+    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.unresolved_digests == ["0xmissing"]
+    assert "0xmissing" in caplog.text
+
+
+def test_search_skills_surfaces_timed_out_results(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _offline_manager(tmp_path)
+    monkeypatch.setattr(manager, "start_search", lambda query, top_k: "qid")
+    monkeypatch.setattr(
+        manager,
+        "get_search_status",
+        lambda query_id: SearchStatus("qid", "completed", True, True, 1, 3),
+    )
+    monkeypatch.setattr(
+        manager,
+        "get_search_results",
+        lambda query_id: SearchResults("qid", True, True, 1, 0, []),
+    )
+
+    outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
+
+    assert outcome.skills == []
+    assert outcome.timed_out is True
+    assert outcome.received_results == 1
+    assert outcome.expected_results == 3
+    assert outcome.verified_results == 1
+    assert outcome.rejected_results == 0
+
+
+def test_search_skills_retries_until_the_query_registers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _offline_manager(tmp_path)
+    request = httpx.Request("POST", "http://test")
+    response = httpx.Response(404, json={"error": "not registered"}, request=request)
+    error = httpx.HTTPStatusError("not registered", request=request, response=response)
+    calls = {"status": 0}
+
+    def get_search_status(query_id: str) -> SearchStatus:
+        calls["status"] += 1
+        if calls["status"] == 1:
+            raise error
+        return SearchStatus("qid", "completed", True, False, 0, 0)
+
+    monkeypatch.setattr(manager, "start_search", lambda query, top_k: "qid")
+    monkeypatch.setattr(manager, "get_search_status", get_search_status)
+    monkeypatch.setattr(
+        manager,
+        "get_search_results",
+        lambda query_id: SearchResults("qid", True, False, 0, 0, []),
+    )
+
+    outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
+
+    assert outcome.skills == []
+    assert calls["status"] == 2
 
 
 def test_oracle_status_tolerates_null_epochs() -> None:

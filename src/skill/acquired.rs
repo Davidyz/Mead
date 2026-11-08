@@ -41,6 +41,12 @@ impl AcquiredSkills {
     /// Duplicate digests keep the first body without cloning the new one. The
     /// digest must already match the body; callers verify that before recording.
     pub(crate) fn record(&self, digest: Hash, skill: &Skill) {
+        // Duplicates only need a shared lock; only a miss takes the write lock.
+        let already_cached = self.read_skills().contains_key(&digest);
+        if already_cached {
+            return;
+        }
+
         let mut skills = self.write_skills();
         skills
             .entry(digest)

@@ -201,12 +201,7 @@ fn plan_search_query(
     let query_id = query.query_id;
     let initiator = query.sender;
 
-    if !query.query_text.is_empty()
-        && blake3::hash(query.query_text.as_bytes()) != query.query_digest
-    {
-        return Err(invalid_input("query text does not match the query digest"));
-    }
-
+    // `insert` validates the query, including that its text matches the digest.
     query_registry.insert(query)?;
 
     // Snapshot the peers at registration time, excluding the initiating node.

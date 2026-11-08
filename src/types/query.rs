@@ -299,25 +299,14 @@ impl SearchQuery {
         sender: NodeID,
     ) -> LyquidResult<Self> {
         let query_bytes = query.as_ref();
-        let query_digest = blake3::hash(query_bytes);
-        let mut query = Self::from_digest(query_digest, params, timestamp, sender)?;
-        query.query_text = String::from_utf8(query_bytes.to_vec())
+        let query_text = String::from_utf8(query_bytes.to_vec())
             .map_err(|_| invalid_input("query text must be valid UTF-8"))?;
-        Ok(query)
-    }
-
-    /// Creates a query from an already-computed query-text digest.
-    pub fn from_digest(
-        query_digest: Hash,
-        params: QueryParams,
-        timestamp: u64,
-        sender: NodeID,
-    ) -> LyquidResult<Self> {
+        let query_digest = blake3::hash(query_bytes);
         let query_id = compute_query_id(query_digest, &params, timestamp, sender);
         let query = Self {
             query_id,
             query_digest,
-            query_text: String::new(),
+            query_text,
             params,
             timestamp,
             sender,
@@ -336,6 +325,12 @@ impl SearchQuery {
     pub fn validate(&self) -> LyquidResult<()> {
         self.params.validate()?;
 
+        if self.query_text.is_empty() {
+            return Err(invalid_input("query text must not be empty"));
+        }
+        if blake3::hash(self.query_text.as_bytes()) != self.query_digest {
+            return Err(invalid_input("query text does not match the query digest"));
+        }
         if self.timestamp == 0 {
             return Err(invalid_input("query timestamp must be non-zero"));
         }
@@ -415,6 +410,20 @@ mod tests {
     fn rejects_mismatched_query_id() {
         let mut query = valid_query();
         query.query_id = blake3::hash(b"different query");
+        assert!(query.validate().is_err());
+    }
+
+    #[lyquid_test::test]
+    fn rejects_empty_query_text() {
+        // A digest-only query has no text for peers to search, so it must never
+        // reach the registry.
+        assert!(SearchQuery::new(b"", QueryParams { k: 10 }, 1, NodeID::new([9u8; 32])).is_err());
+    }
+
+    #[lyquid_test::test]
+    fn rejects_query_text_that_does_not_match_the_digest() {
+        let mut query = valid_query();
+        query.query_text = "different query".to_owned();
         assert!(query.validate().is_err());
     }
 

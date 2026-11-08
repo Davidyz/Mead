@@ -1,6 +1,8 @@
 use crate::api::search::aggregate_matches;
-use crate::api::skills::{parse_uploaded_skill, skill_count_http_response};
-use crate::types::SkillMatch;
+use crate::api::skills::{
+    parse_skill_get_request, parse_uploaded_skill, skill_count_http_response,
+};
+use crate::types::{Hash, SkillMatch};
 use crate::*;
 
 fn test_skill(name: &str) -> Skill {
@@ -84,6 +86,37 @@ fn rejects_invalid_transport_skills() {
     let error = parse_uploaded_skill(Some(body.as_bytes())).unwrap_err();
 
     assert!(error.contains("skill is invalid"));
+}
+
+#[lyquid_test::test]
+fn parses_a_skill_get_request_body() {
+    let digest = Hash::from_bytes([9; 32]);
+    let body = format!(r#"{{"digest":"{digest}"}}"#);
+
+    assert_eq!(
+        parse_skill_get_request(Some(body.as_bytes())).unwrap(),
+        digest
+    );
+    assert!(
+        parse_skill_get_request(None)
+            .unwrap_err()
+            .contains("required")
+    );
+    assert!(
+        parse_skill_get_request(Some(br#"{"digest":"  "}"#))
+            .unwrap_err()
+            .contains("must not be empty")
+    );
+    assert!(
+        parse_skill_get_request(Some(br#"{"digest":"zz"}"#))
+            .unwrap_err()
+            .contains("invalid digest")
+    );
+    assert!(
+        parse_skill_get_request(Some(b"{"))
+            .unwrap_err()
+            .contains("invalid skill get request JSON")
+    );
 }
 
 #[lyquid_test::test]

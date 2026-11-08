@@ -14,7 +14,7 @@ mod api;
 
 use api::skills::{
     ensure_skills_loaded, ensure_skills_loaded_from, ensure_skills_loaded_immutable,
-    handle_skill_upload, skill_count_response, skill_list_json,
+    handle_skill_get, handle_skill_upload, skill_count_response, skill_list_json,
 };
 use api::{
     PeerSearchReply, SearchReply, SearchReplyCache, parse_query_id_request,
@@ -23,7 +23,7 @@ use api::{
 };
 use api::{http_json_response, json_error};
 
-use skill::{Skill, SkillError, SkillManager};
+use skill::{AcquiredSkills, Skill, SkillError, SkillManager};
 use types::invalid_input;
 use types::{
     Bm25Score, CanonicalBytes, NodeRegistry, QueryParams, QueryRegistry, ResultRegistry,
@@ -713,6 +713,7 @@ fn submit_peer_result_impl(
     }
 
     let mut matched_skills = Vec::with_capacity(result.matches.len());
+    let mut matched_digests = Vec::with_capacity(result.matches.len());
     for (skill_match, body) in result.matches.iter().zip(skill_bodies.iter()) {
         let skill =
             Skill::from_canonical_bytes(body).map_err(|error| invalid_input(error.to_string()))?;
@@ -722,6 +723,7 @@ fn submit_peer_result_impl(
         if digest != skill_match.skill_digest {
             return Err(invalid_input("skill body does not match the match digest"));
         }
+        matched_digests.push(digest);
         matched_skills.push(skill);
     }
 
@@ -738,6 +740,13 @@ fn submit_peer_result_impl(
                 "recomputed BM25 score does not match the result",
             ));
         }
+    }
+
+    // Cache peer bodies only after every verification step passes, so rejected
+    // replies cannot populate `/skills/get`. They stay out of the local BM25
+    // corpus.
+    for (digest, skill) in matched_digests.iter().zip(matched_skills.iter()) {
+        AcquiredSkills::shared().record(*digest, skill);
     }
 
     let target = OracleTarget {
@@ -1257,6 +1266,30 @@ fn list_skills(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response>
         Err(error) => return Ok(http_json_response(500, &json_error(&error.to_string()))),
     };
     Ok(http_json_response(200, &body))
+}
+
+// Returns the full body of a skill by digest.
+//
+// `POST /skills/get`
+//
+// Request:
+// ```json
+// { "digest": "51bd2856abb0aab88c12350031ad60057ed89e2b528ca9ffb813e48ee6f27279" }
+// ```
+// The digest is the `skill_digest` / `digest` value returned by search and
+// `/skills/list`; a leading `0x` is accepted.
+//
+// Response - `200 OK`: the same JSON skill structure accepted by
+// `POST /skills/upload`.
+// - `400 Bad Request`: missing, empty, or invalid digest.
+// - `404 Not Found`: no skill with that digest is cached or loaded locally.
+//
+// Peer skills are served from the process-wide cache populated when their
+// bodies arrive during a search UPC; locally uploaded skills fall back to this
+// node's catalog.
+#[method::instance(export = http, method = "POST", path_prefix = "/skills/get")]
+fn get_skill_at_skills_get(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
+    handle_skill_get(&mut ctx, &req)
 }
 
 // Accepts a single JSON skill object, validates it, and registers it with the

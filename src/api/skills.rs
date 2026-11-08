@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use lyquid::prelude::*;
 
-use crate::skill::{Skill, SkillError, SkillManager};
-use crate::types::invalid_input;
+use crate::skill::{AcquiredSkills, Skill, SkillError, SkillManager};
+use crate::types::{invalid_input, parse_hash};
 
 use super::http::{http_json_response, json_error};
 
@@ -34,6 +34,60 @@ pub(crate) fn skill_list_json(manager: &SkillManager) -> String {
         })
         .collect();
     serde_json::json!(skills).to_string()
+}
+
+#[derive(serde::Deserialize)]
+struct SkillGetRequest {
+    digest: String,
+}
+
+/// Parses the `digest` from a `/skills/get` JSON request body.
+pub(crate) fn parse_skill_get_request(body: Option<&[u8]>) -> Result<Hash, String> {
+    let body = body.ok_or_else(|| "request body is required".to_owned())?;
+    let request: SkillGetRequest = serde_json::from_slice(body)
+        .map_err(|error| format!("invalid skill get request JSON: {error}"))?;
+    let digest = request.digest.trim();
+    if digest.is_empty() {
+        return Err("digest must not be empty".to_owned());
+    }
+    parse_hash(digest).map_err(|error| format!("invalid digest: {error}"))
+}
+
+/// Serves the full body of a skill by digest.
+///
+/// Peer-provided skills are served from the process-wide cache populated when
+/// their bodies arrive during a search UPC. Locally uploaded skills fall back to
+/// the node-local catalog. The body uses the same JSON skill structure accepted
+/// by `POST /skills/upload`.
+pub(crate) fn handle_skill_get(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    req: &http::Request,
+) -> LyquidResult<http::Response> {
+    let digest = match parse_skill_get_request(req.body.as_deref()) {
+        Ok(digest) => digest,
+        Err(message) => return Ok(http_json_response(400, &json_error(&message))),
+    };
+
+    if let Some(skill) = AcquiredSkills::shared().get(&digest) {
+        return skill_json_response(&skill);
+    }
+
+    ensure_skills_loaded(ctx)?;
+    let Some(skill) = SkillManager::shared()
+        .ok()
+        .and_then(|manager| manager.get(&digest))
+    else {
+        return Ok(http_json_response(404, &json_error("skill not found")));
+    };
+
+    skill_json_response(&skill)
+}
+
+fn skill_json_response(skill: &Skill) -> LyquidResult<http::Response> {
+    match skill.to_json() {
+        Ok(body) => Ok(http_json_response(200, &body)),
+        Err(error) => Ok(http_json_response(500, &json_error(&error.to_string()))),
+    }
 }
 
 pub(crate) fn handle_skill_upload(

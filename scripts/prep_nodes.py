@@ -40,6 +40,7 @@ import tomllib
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import httpx
 from rich import print
@@ -309,7 +310,7 @@ def fund_nodes(
         print(f"Skipping node funding: {devnet_dir} does not exist")
         return
 
-    configs: dict[int, dict[str, object]] = {}
+    configs: dict[int, dict[str, Any]] = {}
     for node in nodes:
         path = devnet_dir / f"node{node.index}.toml"
         if not path.is_file():
@@ -319,7 +320,7 @@ def fund_nodes(
             configs[node.index] = tomllib.load(file)
 
     try:
-        funder_config = configs[1]["submitter"]["inline"]  # type: ignore[index]
+        funder_config = configs[1]["submitter"]["inline"]
     except (KeyError, TypeError) as error:
         raise RuntimeError(
             f"could not read the node1 submitter key: {error}"
@@ -335,7 +336,7 @@ def fund_nodes(
     for node in nodes:
         config = configs[node.index]
         try:
-            private_key = config["submitter"]["inline"]  # type: ignore[index]
+            private_key = config["submitter"]["inline"]
         except KeyError, TypeError:
             print(f"node{node.index}: no submitter.inline private key; skipping")
             continue

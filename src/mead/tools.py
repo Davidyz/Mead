@@ -67,7 +67,15 @@ class MeadTools:
         ]
 
     def mcp_search_skills(self, query: str, top_k: int = 5) -> list[dict[str, str]]:
-        """Search the network and return matching skill summaries."""
+        """Search the network for skills using a lexical BM25 query.
+
+        Matching is exact-token based: the query and each skill are lowercased,
+        split into words, and English stop words are removed. There is no
+        stemming or synonym expansion, so include synonyms, related terms, and
+        alternative word forms (for example, "image photo picture create
+        generate draw") to improve recall. Returns name, description, and digest
+        for each aggregated match.
+        """
         return [
             _summary_payload(summary)
             for summary in self._node_manager.search_skills(query, top_k=top_k)

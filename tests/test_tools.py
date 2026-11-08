@@ -134,6 +134,21 @@ def _normalize_digest(digest: str) -> str:
     return digest.removeprefix("0x").lower()
 
 
+def _wait_for_search(manager: NodeManager, query_id: str) -> None:
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        try:
+            status = manager.get_search_status(query_id)
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 404:
+                raise
+        else:
+            if status.completed:
+                return
+        time.sleep(1.0)
+    raise RuntimeError(f"search {query_id} did not complete within 60s")
+
+
 def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
     manager = node_manager(devnet)
     tools = MeadTools(manager)
@@ -149,8 +164,11 @@ def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
     # The first search after a fresh devnet can lose its peer replies while the
     # nodes warm up; retry with a fresh query.
     for attempt in range(3):
+        query = f"skill integration {attempt}"
         try:
-            summaries = tools.mcp_search_skills(f"skill tools {attempt}", top_k=5)
+            query_id = manager.start_search(query, top_k=5)
+            _wait_for_search(manager, query_id)
+            results = manager.get_search_results(query_id)
         except httpx.TransportError as error:
             pytest.skip(f"devnet is not available: {error}")
         except (httpx.HTTPError, RuntimeError) as error:
@@ -158,32 +176,39 @@ def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
             time.sleep(2)
             continue
 
-        summary = next(
+        peer_digest = next(
             (
-                candidate
-                for candidate in summaries
-                if _normalize_digest(candidate["digest"]) not in local_digests
+                match.skill_digest
+                for match in results.aggregated
+                if _normalize_digest(match.skill_digest) not in local_digests
             ),
             None,
         )
-        if summary is None:
+        if peer_digest is None:
             last_error = RuntimeError("search returned no peer skills")
             time.sleep(2)
             continue
 
-        skill = manager.get_skill(summary["digest"])
-        assert skill.name == summary["name"]
-        assert skill.description == summary["description"]
+        # The raw aggregated result must contain a peer digest; now verify that
+        # the MCP search resolves it instead of dropping it, and that its body
+        # is actually retrievable.
+        skill = manager.get_skill(peer_digest)
+        assert skill.name
+        assert skill.description
 
-        skill_md = tools.mcp_get_skill(summary["digest"])
+        summaries = tools.mcp_search_skills(query, top_k=5)
+        assert any(
+            _normalize_digest(summary["digest"]) == _normalize_digest(peer_digest)
+            for summary in summaries
+        ), f"MCP search dropped peer digest {peer_digest}"
+
+        skill_md = tools.mcp_get_skill(peer_digest)
         assert f"# {skill.name}" in skill_md
         assert skill.description in skill_md
         assert skill.instructions in skill_md
 
         if skill.resources:
-            selected = tools.mcp_get_skill(
-                summary["digest"], paths=[skill.resources[0].path]
-            )
+            selected = tools.mcp_get_skill(peer_digest, paths=[skill.resources[0].path])
             assert skill.resources[0].contents in selected
         return
 

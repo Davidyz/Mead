@@ -37,10 +37,10 @@ For example, in pi-agent, use the following:
 - `list_skill` — lists the local node's skills with name, description, and digest.
 - `search_skills(query, top_k=5)` — searches the network and returns aggregated
   skills with name, description, and digest. Use the digest with `get_skill`.
-- `get_skill(digest, detail="full", paths=None)` — fetches a skill by digest
-  through `/skills/get`. `detail="description"` returns only the description;
-  `detail="full"` includes instructions and resources. Pass `paths` to expose
-  only selected resource files.
+- `get_skill(digest, detail="skill_md", paths=None)` — fetches a skill by
+  digest through `/skills/get`. `detail="skill_md"` returns the SKILL.md
+  content and lists available resource paths; `detail="full"` also includes
+  every resource. Pass `paths` to include only selected resource contents.
 
 ## Uploading Skills
 

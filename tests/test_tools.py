@@ -58,7 +58,7 @@ def test_mcp_search_skills_passes_query_and_top_k() -> None:
     assert fake.search_calls == [("demo query", 3)]
 
 
-def test_mcp_get_skill_exposes_description_or_selected_resources() -> None:
+def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:
     skill = Skill.from_manifest(
         {
             "id": "custom-id",
@@ -75,15 +75,22 @@ def test_mcp_get_skill_exposes_description_or_selected_resources() -> None:
     fake = FakeNodeManager([], {"digest-demo": skill})
     tools = MeadTools(cast(NodeManager, fake))
 
-    assert tools.mcp_get_skill("digest-demo", "description") == "A demo skill"
+    skill_md = tools.mcp_get_skill("digest-demo")
+    assert "# demo" in skill_md
+    assert "A demo skill" in skill_md
+    assert "Use this skill." in skill_md
+    assert "## Resource: a.txt" not in skill_md
+    assert "## Resource: nested/b.txt" not in skill_md
+    assert "- a.txt" in skill_md
 
-    full = tools.mcp_get_skill("digest-demo", "full", ["nested/b.txt"])
-    assert "# demo" in full
-    assert "Use this skill." in full
+    selected = tools.mcp_get_skill("digest-demo", paths=["nested/b.txt"])
+    assert "## Resource: nested/b.txt\n\nB" in selected
+    assert "## Resource: a.txt" not in selected
+
+    full = tools.mcp_get_skill("digest-demo", "full")
+    assert "## Resource: a.txt\n\nA" in full
     assert "## Resource: nested/b.txt\n\nB" in full
-    assert "## Resource: a.txt" not in full
-    assert "- a.txt" in full
-    assert fake.get_calls == ["digest-demo", "digest-demo"]
+    assert fake.get_calls == ["digest-demo", "digest-demo", "digest-demo"]
 
 
 def test_mcp_get_skill_rejects_unknown_resources_and_detail_levels() -> None:
@@ -95,7 +102,7 @@ def test_mcp_get_skill_rejects_unknown_resources_and_detail_levels() -> None:
     tools = MeadTools(cast(NodeManager, FakeNodeManager([], {"digest-demo": skill})))
 
     with pytest.raises(ValueError, match="does not contain resources: missing.txt"):
-        tools.mcp_get_skill("digest-demo", "full", ["missing.txt"])
+        tools.mcp_get_skill("digest-demo", "skill_md", ["missing.txt"])
     with pytest.raises(ValueError, match="unsupported detail level"):
         tools.mcp_get_skill("digest-demo", cast(Any, "summary"))
 
@@ -155,12 +162,16 @@ def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
         assert skill.name == summary["name"]
         assert skill.description == summary["description"]
 
-        description = tools.mcp_get_skill(summary["digest"], "description")
-        assert description == skill.description
+        skill_md = tools.mcp_get_skill(summary["digest"])
+        assert f"# {skill.name}" in skill_md
+        assert skill.description in skill_md
+        assert skill.instructions in skill_md
 
-        full = tools.mcp_get_skill(summary["digest"], "full")
-        assert f"# {skill.name}" in full
-        assert skill.instructions in full
+        if skill.resources:
+            selected = tools.mcp_get_skill(
+                summary["digest"], paths=[skill.resources[0].path]
+            )
+            assert skill.resources[0].contents in selected
         return
 
     pytest.fail(f"MCP search/get round trip failed: {last_error}")

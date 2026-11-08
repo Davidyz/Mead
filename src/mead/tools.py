@@ -8,6 +8,8 @@ lazy from mcp.server import MCPServer
 from .node_manager import NodeManager, SkillSummary
 from .skills import Skill
 
+type SkillDetail = Literal["skill_md", "full"]
+
 
 def _summary_payload(summary: SkillSummary) -> dict[str, str]:
     return {
@@ -19,16 +21,20 @@ def _summary_payload(summary: SkillSummary) -> dict[str, str]:
 
 def _render_skill(
     skill: Skill,
-    detail: Literal["description", "full"],
+    detail: SkillDetail,
     paths: Iterable[str] | None,
 ) -> str:
-    if detail == "description":
-        return skill.description
-    if detail != "full":
+    if detail not in ("skill_md", "full"):
         raise ValueError(f"unsupported detail level: {detail}")
 
     resources = {resource.path: resource for resource in skill.resources}
-    selected = sorted(resources) if paths is None else list(dict.fromkeys(paths))
+    if paths is not None:
+        selected = list(dict.fromkeys(paths))
+    elif detail == "full":
+        selected = sorted(resources)
+    else:
+        selected = []
+
     missing = [path for path in selected if path not in resources]
     if missing:
         raise ValueError(
@@ -70,14 +76,14 @@ class MeadTools:
     def mcp_get_skill(
         self,
         digest: str,
-        detail: Literal["description", "full"] = "full",
+        detail: SkillDetail = "skill_md",
         paths: Iterable[str] | None = None,
     ) -> str:
         """Return a skill for an LLM agent, optionally including its files.
 
-        ``detail="description"`` exposes only the description. ``detail="full"``
-        exposes the instructions and the requested resource contents. Passing
-        ``paths=None`` includes every resource; pass a subset to limit exposure.
+        ``detail="skill_md"`` (default) returns the SKILL.md content and lists
+        available resource paths. ``detail="full"`` also includes every resource.
+        Pass ``paths`` to include only those resource contents.
         """
         return _render_skill(self._node_manager.get_skill(digest), detail, paths)
 

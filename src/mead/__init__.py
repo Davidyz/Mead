@@ -49,7 +49,7 @@ async def main_coro() -> None:
                 timeout=cli_args.wait_timeout,
                 poll_interval=cli_args.poll_interval,
             )
-        except (httpx.HTTPError, RuntimeError, ValueError) as error:
+        except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as error:
             print(f"Failed to prepare node: {error}", file=sys.stderr)
             sys.exit(1)
         print(

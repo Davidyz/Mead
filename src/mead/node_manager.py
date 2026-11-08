@@ -19,6 +19,7 @@ class SkillSummary:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
         return cls(
             name=data["name"],
             description=data["description"],
@@ -35,6 +36,7 @@ class UploadSkillResponse:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
         return cls(
             uploaded=data["uploaded"],
             digests=list(data.get("digests", [])),
@@ -52,11 +54,12 @@ class OracleStatus:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
         return cls(
             active=bool(data.get("active", False)),
-            epoch=int(data.get("epoch", 0)),
+            epoch=_json_int(data.get("epoch")),
             source_active=bool(data.get("source_active", False)),
-            source_epoch=int(data.get("source_epoch", 0)),
+            source_epoch=_json_int(data.get("source_epoch")),
         )
 
 
@@ -69,9 +72,10 @@ class ActivationResponse:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
         return cls(
             status=str(data.get("status", "")),
-            epoch=int(data.get("epoch", 0)),
+            epoch=_json_int(data.get("epoch")),
         )
 
     @property
@@ -89,6 +93,7 @@ class NodeRegistrationResponse:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
         return cls(
             status=str(data.get("status", "")),
             method=data.get("method"),
@@ -107,6 +112,19 @@ class PrepareResult:
 
 def _strip_id_prefix(value: str, prefix: str) -> str:
     return value.strip().removeprefix(prefix)
+
+
+def _mapping(data: Any) -> Mapping[str, Any]:
+    if not isinstance(data, Mapping):
+        raise TypeError(f"expected a JSON object, got {type(data).__name__}")
+    return data
+
+
+def _json_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except TypeError, ValueError:
+        return default
 
 
 def _validate_wait(timeout: float, poll_interval: float) -> None:
@@ -236,7 +254,8 @@ class NodeManager:
         )
         if response.is_error:
             response.raise_for_status()
-        return list(response.json().get("nodes", []))
+        body = _mapping(response.json())
+        return list(body.get("nodes", []))
 
     def ensure_oracle_active(
         self, *, activate: bool, timeout: float, poll_interval: float
@@ -272,7 +291,10 @@ class NodeManager:
                             body = error.response.json()
                         except ValueError:
                             body = {}
-                        if body.get("status") == "not_staged":
+                        if (
+                            isinstance(body, Mapping)
+                            and body.get("status") == "not_staged"
+                        ):
                             raise RuntimeError(
                                 "search oracle is not staged; deploy with the "
                                 "constructor committee"

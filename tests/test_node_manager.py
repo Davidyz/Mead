@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -338,3 +338,17 @@ def test_ensure_registered_times_out(
 
     with pytest.raises(RuntimeError, match="was not registered"):
         manager.ensure_registered(timeout=0.05, poll_interval=0.01)
+
+
+def test_oracle_status_tolerates_null_epochs() -> None:
+    status = OracleStatus.from_dict(
+        {"active": True, "epoch": None, "source_active": True, "source_epoch": None}
+    )
+
+    assert status.epoch == 0
+    assert status.source_epoch == 0
+
+
+def test_registration_response_rejects_non_object_json() -> None:
+    with pytest.raises(TypeError, match="expected a JSON object"):
+        NodeRegistrationResponse.from_dict(cast(Any, []))

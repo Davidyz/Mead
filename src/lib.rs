@@ -1264,14 +1264,24 @@ fn list_skills(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response>
 
 // Returns the full body of a skill by digest.
 //
-// `GET /skills/get?digest=<hex>`
+// `POST /skills/get`
 //
+// Request:
+// ```json
+// { "digest": "51bd2856abb0aab88c12350031ad60057ed89e2b528ca9ffb813e48ee6f27279" }
+// ```
 // The digest is the `skill_digest` / `digest` value returned by search and
-// `/skills/list`. Peer skills are served from the process-wide cache populated
-// when their bodies arrive during a search UPC; locally uploaded skills fall
-// back to this node's catalog. The response body is the same JSON skill
-// structure accepted by `POST /skills/upload`.
-#[method::instance(export = http, method = "GET", path_prefix = "/skills/get")]
+// `/skills/list`; a leading `0x` is accepted.
+//
+// Response - `200 OK`: the same JSON skill structure accepted by
+// `POST /skills/upload`.
+// - `400 Bad Request`: missing, empty, or invalid digest.
+// - `404 Not Found`: no skill with that digest is cached or loaded locally.
+//
+// Peer skills are served from the process-wide cache populated when their
+// bodies arrive during a search UPC; locally uploaded skills fall back to this
+// node's catalog.
+#[method::instance(export = http, method = "POST", path_prefix = "/skills/get")]
 fn get_skill_at_skills_get(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
     handle_skill_get(&mut ctx, &req)
 }

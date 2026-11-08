@@ -36,22 +36,21 @@ pub(crate) fn skill_list_json(manager: &SkillManager) -> String {
     serde_json::json!(skills).to_string()
 }
 
-/// Extracts the `digest` query parameter from a `/skills/get` URL.
-pub(crate) fn parse_skill_get_digest(url: &str) -> Result<Hash, String> {
-    let query = url
-        .split_once('?')
-        .map(|(_, query)| query)
-        .unwrap_or_default();
-    for pair in query.split('&') {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        if key == "digest" {
-            if value.is_empty() {
-                return Err("digest query parameter must not be empty".to_owned());
-            }
-            return parse_hash(value).map_err(|error| format!("invalid digest: {error}"));
-        }
+#[derive(serde::Deserialize)]
+struct SkillGetRequest {
+    digest: String,
+}
+
+/// Parses the `digest` from a `/skills/get` JSON request body.
+pub(crate) fn parse_skill_get_request(body: Option<&[u8]>) -> Result<Hash, String> {
+    let body = body.ok_or_else(|| "request body is required".to_owned())?;
+    let request: SkillGetRequest = serde_json::from_slice(body)
+        .map_err(|error| format!("invalid skill get request JSON: {error}"))?;
+    let digest = request.digest.trim();
+    if digest.is_empty() {
+        return Err("digest must not be empty".to_owned());
     }
-    Err("digest query parameter is required".to_owned())
+    parse_hash(digest).map_err(|error| format!("invalid digest: {error}"))
 }
 
 /// Serves the full body of a skill by digest.
@@ -64,7 +63,7 @@ pub(crate) fn handle_skill_get(
     ctx: &mut crate::__lyquid::InstanceContext,
     req: &http::Request,
 ) -> LyquidResult<http::Response> {
-    let digest = match parse_skill_get_digest(&req.url) {
+    let digest = match parse_skill_get_request(req.body.as_deref()) {
         Ok(digest) => digest,
         Err(message) => return Ok(http_json_response(400, &json_error(&message))),
     };

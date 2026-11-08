@@ -242,13 +242,13 @@ fn plan_search_query(
 
 // Stores a result and triggers completion when every expected peer has answered.
 //
-// This is only reachable through the certified `coordinate_result` entry point,
-// which the initiating node calls after it has independently verified the peer's
-// signature, skill bodies, Merkle root, and recomputed BM25 scores. The chain
-// therefore never records a result that bypassed the initiator's verification.
-// BM25 scores themselves are not chain-verifiable (each peer's corpus is local),
-// so the trust model is "the initiator verifies its peers"; clients trust the
-// initiator that ran the search. See `submit_peer_result_impl` for the checks.
+// Results reach consensus state only through the certified `coordinate_result`
+// entry point. In the deployed instance code, the initiator certifies that call
+// only after `submit_peer_result_impl` verified the peer signature, skill bodies,
+// Merkle root, and recomputed BM25 scores, and the oracle policy requires the
+// sender to be an expected responder. BM25 scores themselves are not
+// chain-verifiable (each peer's corpus is local), so the residual trust is "the
+// initiator verifies its peers"; clients trust the initiator that ran the search.
 fn record_search_result(
     query_registry: &mut QueryRegistry,
     result_registry: &mut ResultRegistry,
@@ -488,8 +488,9 @@ fn search_request(
 //
 // The certificate is issued to this initiator, not the peer: it authorizes this
 // node to record the result. Authenticity still comes from the peer's own Ed25519
-// signature over the result, so a certificate cannot forge or alter it. Every
-// result reaching `coordinate_result` has passed these local checks first.
+// signature over the result, so a certificate cannot forge or alter it. In the
+// deployed instance code, every result certified for `coordinate_result` has
+// passed these local checks first.
 fn submit_peer_result_impl(
     ctx: &mut crate::__lyquid::InstanceContext,
     peer_reply: PeerSearchReply,
@@ -591,10 +592,13 @@ fn coordinate_search(ctx: &mut _, query: SearchQuery) -> LyquidResult<()> {
 
 // Accepts a certified peer result and records it on-chain.
 //
-// This is the only way a result enters the result registry. The submitting node
-// certifies the call only after `submit_peer_result_impl` has verified the peer's
-// signature, the transmitted skill bodies, the Merkle root, and the recomputed
-// BM25 scores, so unverified results cannot be injected into consensus state.
+// The initiating node calls this only after `submit_peer_result_impl` verified
+// the peer's signature, the transmitted skill bodies, the Merkle root, and the
+// recomputed BM25 scores. On-chain, the oracle policy additionally requires the
+// sender to be one of the query's expected responders, so consensus state cannot
+// accept a result from an unassigned node. BM25 scores themselves cannot be
+// re-verified on-chain because each peer scores against its own local corpus;
+// clients trust the initiator that ran the search.
 #[method::network(group = oracle::certified::search)]
 fn coordinate_result(ctx: &mut _, result: SearchResult) -> LyquidResult<()> {
     if !verify::verify_signed(&result) {
@@ -642,7 +646,9 @@ fn validate(
             let Some(input) = decode_by_fields!(&params.input, query: SearchQuery) else {
                 return Ok(false);
             };
-            if blake3::hash(input.query.query_text.as_bytes()) != input.query.query_digest {
+            if input.query.query_text.is_empty()
+                || blake3::hash(input.query.query_text.as_bytes()) != input.query.query_digest
+            {
                 return Ok(false);
             }
             Ok(verify::verify_signed(&input.query))
@@ -651,7 +657,16 @@ fn validate(
             let Some(input) = decode_by_fields!(&params.input, result: SearchResult) else {
                 return Ok(false);
             };
-            Ok(verify::verify_signed(&input.result))
+            if !verify::verify_signed(&input.result) {
+                return Ok(false);
+            }
+            // Enforce the responder-set invariant in the policy too, so a buggy
+            // or hostile instance cannot certify an unassigned result even
+            // though the deployed code path already checks it.
+            Ok(ctx
+                .network
+                .query_registry
+                .is_expected_responder(&input.result.query_id, input.result.sender))
         }
         "register_node" | "unregister_node" => {
             let Some(input) = decode_by_fields!(&params.input, node: NodeID) else {

@@ -1,9 +1,10 @@
 //! On-chain registry of nodes that take part in searches.
 //!
-//! Nodes self-register through the `register_node` network function, which binds
-//! the caller's on-chain address to its Ed25519 node identity. `register_query`
-//! snapshots this registry to decide which peers must be notified about a new
-//! search, so the registry is consensus state rather than node-local state.
+//! Nodes self-register through their local `/nodes/register` instance endpoint,
+//! which submits a certified `register_node(node_id)` call carrying the node's
+//! own Ed25519 identity. `register_query` snapshots this registry to decide
+//! which peers must be notified about a new search, so the registry is consensus
+//! state rather than node-local state.
 
 use lyquid::prelude::*;
 

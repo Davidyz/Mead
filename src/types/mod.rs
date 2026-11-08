@@ -3,15 +3,17 @@ pub mod nodes;
 pub mod query;
 pub mod results;
 
-pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection};
+pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection, parse_hash};
 pub use nodes::NodeRegistry;
 pub use query::{
     MAX_RESULTS_PER_PEER, QueryParams, QueryRegistry, ResultsPerPeer,
     SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery, compute_query_id,
 };
-pub use results::{Bm25Score, MAX_MATCHES, ResultRegistry, SearchResult, SkillMatch};
+pub use results::{
+    Bm25Score, MAX_MATCHES, MAX_RESULTS_PER_QUERY, ResultRegistry, SearchResult, SkillMatch,
+};
 
-use lyquid::prelude::{Address, LyquidError};
+use lyquid::prelude::{LyquidError, NodeID};
 
 /// A trait for types that have a canonical byte representation for signing.
 ///
@@ -35,13 +37,13 @@ pub trait CanonicalBytes {
     }
 }
 
-/// A trait for types that carry a signature and a sender address.
+/// A trait for types that carry a signature and a sender node identity.
 ///
 /// Builds on [`CanonicalBytes`] to expose the fields needed for verification,
 /// allowing signing/verification logic to be written once generically.
 pub trait Signed: CanonicalBytes {
-    /// The address of the entity that signed this message.
-    fn sender(&self) -> Address;
+    /// The node identity of the entity that signed this message.
+    fn sender(&self) -> NodeID;
 
     /// The raw signature bytes, if the item has been signed.
     fn signature(&self) -> Option<&[u8]>;

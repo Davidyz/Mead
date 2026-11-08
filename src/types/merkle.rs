@@ -44,6 +44,16 @@ where
     Ok(Hash::from_bytes(arr))
 }
 
+/// Parse a `Hash` from a hex string with optional "0x" prefix.
+pub fn parse_hash(value: &str) -> Result<Hash, String> {
+    let hex_str = value.strip_prefix("0x").unwrap_or(value);
+    let bytes = hex::decode(hex_str)?;
+    let arr: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| "Hash must be 32 bytes".to_string())?;
+    Ok(Hash::from_bytes(arr))
+}
+
 mod hex {
     /// Encode bytes as a lowercase hex string.
     pub fn encode(bytes: &[u8]) -> String {

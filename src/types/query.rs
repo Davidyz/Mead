@@ -25,18 +25,17 @@ const QUERY_ID_DOMAIN: &[u8] = b"mead/query-id/v1";
 /// Registry that tracks all submitted queries and their responders.
 ///
 /// - `queries`: maps query ID to the full SearchQuery
-/// - `responder_index`: maps query ID to the set of addresses that submitted results
-/// - `expected_nodes`: maps query ID to the peer nodes that should be notified
-/// - `expected_responders`: maps query ID to the addresses that must respond
+/// - `responder_index`: maps query ID to the set of nodes that submitted results
+/// - `expected_nodes`: maps query ID to the peer nodes that should be notified and
+///   must respond before the query is complete
 /// - `initiator_index`: maps query ID to the node that started it
 /// - `deadline_index`: maps query ID to the chain position after which the
 ///   query stops waiting for missing responders
 #[derive(Debug, Clone)]
 pub struct QueryRegistry {
     queries: HashMap<Hash, SearchQuery>,
-    responder_index: HashMap<Hash, HashSet<Address>>,
+    responder_index: HashMap<Hash, HashSet<NodeID>>,
     expected_nodes: HashMap<Hash, Vec<NodeID>>,
-    expected_responders: HashMap<Hash, HashSet<Address>>,
     initiator_index: HashMap<Hash, NodeID>,
     deadline_index: HashMap<Hash, ChainPos>,
 }
@@ -47,7 +46,6 @@ impl Default for QueryRegistry {
             queries: new_hashmap(),
             responder_index: new_hashmap(),
             expected_nodes: new_hashmap(),
-            expected_responders: new_hashmap(),
             initiator_index: new_hashmap(),
             deadline_index: new_hashmap(),
         }
@@ -79,8 +77,18 @@ impl QueryRegistry {
         self.queries.contains_key(query_id)
     }
 
-    /// Records an address as having submitted a result for this query.
-    pub fn mark_responder(&mut self, query_id: Hash, responder: Address) -> LyquidResult<()> {
+    /// Returns true if an identical query is already registered.
+    ///
+    /// Query IDs are derived from every signed field, so an identical query has
+    /// the same ID. Registration callers treat this as an idempotent no-op: a
+    /// repeated submission (for example two identical searches created in the
+    /// same second) is not an error and does not re-announce the query.
+    pub fn contains_identical(&self, query: &SearchQuery) -> bool {
+        self.queries.get(&query.query_id) == Some(query)
+    }
+
+    /// Records a node as having submitted a result for this query.
+    pub fn mark_responder(&mut self, query_id: Hash, responder: NodeID) -> LyquidResult<()> {
         let responders = self
             .responder_index
             .get_mut(&query_id)
@@ -90,23 +98,22 @@ impl QueryRegistry {
     }
 
     /// Returns the responder set for a query, if the query exists.
-    pub fn responders(&self, query_id: &Hash) -> Option<&HashSet<Address>> {
+    pub fn responders(&self, query_id: &Hash) -> Option<&HashSet<NodeID>> {
         self.responder_index.get(query_id)
     }
 
     /// Records the peers expected to process this query, the node that started
     /// it, and the position after which missing responders no longer block.
     ///
-    /// The query must already be registered. `expected_nodes` is the notification
-    /// target list handed to the UPC prepare step, `expected_responders` is the
-    /// set of addresses that must submit a result before the query is complete,
-    /// and `deadline` bounds how long that set is waited for.
+    /// The query must already be registered. `expected_nodes` is both the
+    /// notification target list handed to the UPC prepare step and the set of
+    /// node identities that must submit a result before the query is complete.
+    /// `deadline` bounds how long that set is waited for.
     pub fn plan(
         &mut self,
         query_id: Hash,
         initiator: NodeID,
         expected_nodes: Vec<NodeID>,
-        expected_responders: HashSet<Address>,
         deadline: ChainPos,
     ) -> LyquidResult<()> {
         if !self.queries.contains_key(&query_id) {
@@ -114,8 +121,6 @@ impl QueryRegistry {
         }
 
         self.expected_nodes.insert(query_id, expected_nodes);
-        self.expected_responders
-            .insert(query_id, expected_responders);
         self.deadline_index.insert(query_id, deadline);
         self.initiator_index.insert(query_id, initiator);
         Ok(())
@@ -128,9 +133,26 @@ impl QueryRegistry {
             .map(|nodes| nodes.as_slice())
     }
 
+    /// Returns true if `node` is one of the peers expected to answer this query.
+    ///
+    /// Results from nodes outside this set are rejected so an unassigned node
+    /// cannot pad the result registry or influence the aggregated response.
+    pub fn is_expected_responder(&self, query_id: &Hash, node: NodeID) -> bool {
+        self.expected_nodes
+            .get(query_id)
+            .is_some_and(|nodes| nodes.contains(&node))
+    }
+
     /// Returns the node that initiated this query, if it was resolvable.
     pub fn initiator_node(&self, query_id: &Hash) -> Option<NodeID> {
         self.initiator_index.get(query_id).copied()
+    }
+
+    /// Returns true once the chain position has passed this query's deadline.
+    pub fn deadline_passed(&self, query_id: &Hash, position: ChainPos) -> bool {
+        self.deadline_index
+            .get(query_id)
+            .is_some_and(|deadline| *deadline <= position)
     }
 
     /// Returns the chain position after which the query stops waiting for
@@ -147,20 +169,28 @@ impl QueryRegistry {
     /// After the deadline, a query is complete even if some expected peers never
     /// answered, so their absence cannot block the initiating node forever.
     pub fn is_complete(&self, query_id: &Hash, position: ChainPos) -> bool {
-        let Some(expected) = self.expected_responders.get(query_id) else {
+        let Some(expected) = self.expected_nodes.get(query_id) else {
             return false;
         };
         let Some(actual) = self.responder_index.get(query_id) else {
             return false;
         };
 
-        if expected.iter().all(|address| actual.contains(address)) {
+        if expected.iter().all(|node| actual.contains(node)) {
             return true;
         }
 
-        self.deadline_index
-            .get(query_id)
-            .is_some_and(|deadline| *deadline <= position)
+        self.deadline_passed(query_id, position)
+    }
+
+    /// Returns the number of peers expected to process this query.
+    pub fn expected_peer_count(&self, query_id: &Hash) -> usize {
+        self.expected_nodes.get(query_id).map_or(0, Vec::len)
+    }
+
+    /// Returns the number of peers that have submitted a result for this query.
+    pub fn responder_count(&self, query_id: &Hash) -> usize {
+        self.responder_index.get(query_id).map_or(0, HashSet::len)
     }
 
     /// Returns the number of registered queries.
@@ -206,14 +236,14 @@ pub fn compute_query_id(
     query_digest: Hash,
     params: &QueryParams,
     timestamp: u64,
-    sender: Address,
+    sender: NodeID,
 ) -> Hash {
     let mut hasher = blake3::Hasher::new();
     hasher.update(QUERY_ID_DOMAIN);
     hasher.update(query_digest.as_bytes());
     hasher.update(&params.k.to_le_bytes());
     hasher.update(&timestamp.to_le_bytes());
-    hasher.update(sender.as_slice());
+    hasher.update(&sender.0);
     hasher.finalize()
 }
 
@@ -235,12 +265,16 @@ pub struct SearchQuery {
         deserialize_with = "deserialize_hash"
     )]
     pub query_digest: Hash,
+    /// Query text. Only the digest is committed by the query ID; the text is
+    /// carried so every hosting peer can run the same search.
+    #[serde(default)]
+    pub query_text: String,
     /// Search parameters (e.g., number of results per peer).
     pub params: QueryParams,
     /// UTC timestamp of when the query was created, in seconds since the Unix epoch.
     pub timestamp: u64,
-    /// Address of the querying node `X₀`.
-    pub sender: Address,
+    /// Node identity of the querying node `X₀`.
+    pub sender: NodeID,
     /// Signature over [`crate::types::CanonicalBytes::signing_payload`] by `X₀`, if present.
     signature: Option<Vec<u8>>,
 }
@@ -253,13 +287,13 @@ impl crate::types::CanonicalBytes for SearchQuery {
         bytes.extend_from_slice(self.query_digest.as_bytes());
         bytes.extend_from_slice(&self.params.k.to_le_bytes());
         bytes.extend_from_slice(&self.timestamp.to_le_bytes());
-        bytes.extend_from_slice(self.sender.as_slice());
+        bytes.extend_from_slice(&self.sender.0);
         bytes
     }
 }
 
 impl crate::types::Signed for SearchQuery {
-    fn sender(&self) -> Address {
+    fn sender(&self) -> NodeID {
         self.sender
     }
 
@@ -277,23 +311,17 @@ impl SearchQuery {
         query: impl AsRef<[u8]>,
         params: QueryParams,
         timestamp: u64,
-        sender: Address,
+        sender: NodeID,
     ) -> LyquidResult<Self> {
-        let query_digest = blake3::hash(query.as_ref());
-        Self::from_digest(query_digest, params, timestamp, sender)
-    }
-
-    /// Creates a query from an already-computed query-text digest.
-    pub fn from_digest(
-        query_digest: Hash,
-        params: QueryParams,
-        timestamp: u64,
-        sender: Address,
-    ) -> LyquidResult<Self> {
+        let query_bytes = query.as_ref();
+        let query_text = String::from_utf8(query_bytes.to_vec())
+            .map_err(|_| invalid_input("query text must be valid UTF-8"))?;
+        let query_digest = blake3::hash(query_bytes);
         let query_id = compute_query_id(query_digest, &params, timestamp, sender);
         let query = Self {
             query_id,
             query_digest,
+            query_text,
             params,
             timestamp,
             sender,
@@ -312,6 +340,12 @@ impl SearchQuery {
     pub fn validate(&self) -> LyquidResult<()> {
         self.params.validate()?;
 
+        if self.query_text.is_empty() {
+            return Err(invalid_input("query text must not be empty"));
+        }
+        if blake3::hash(self.query_text.as_bytes()) != self.query_digest {
+            return Err(invalid_input("query text does not match the query digest"));
+        }
         if self.timestamp == 0 {
             return Err(invalid_input("query timestamp must be non-zero"));
         }
@@ -328,9 +362,16 @@ impl SearchQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::CanonicalBytes;
 
     fn valid_query() -> SearchQuery {
-        SearchQuery::new(b"rust async", QueryParams { k: 10 }, 1, Address::ZERO).unwrap()
+        SearchQuery::new(
+            b"rust async",
+            QueryParams { k: 10 },
+            1,
+            NodeID::new([9u8; 32]),
+        )
+        .unwrap()
     }
 
     #[lyquid_test::test]
@@ -350,6 +391,28 @@ mod tests {
     }
 
     #[lyquid_test::test]
+    fn query_id_commits_to_the_sender_node_identity() {
+        let digest = blake3::hash(b"query");
+        let params = QueryParams { k: 10 };
+        let first = compute_query_id(digest, &params, 1, NodeID::new([1u8; 32]));
+        let second = compute_query_id(digest, &params, 1, NodeID::new([2u8; 32]));
+
+        assert_ne!(first, second);
+    }
+
+    #[lyquid_test::test]
+    fn signing_payload_commits_to_the_sender_node_key() {
+        let first =
+            SearchQuery::new(b"query", QueryParams { k: 10 }, 1, NodeID::new([1u8; 32])).unwrap();
+        let second =
+            SearchQuery::new(b"query", QueryParams { k: 10 }, 1, NodeID::new([2u8; 32])).unwrap();
+
+        let first_payload = first.signing_payload();
+        assert!(first_payload.ends_with(&[1u8; 32]));
+        assert_ne!(first_payload, second.signing_payload());
+    }
+
+    #[lyquid_test::test]
     fn signature_is_attached_after_construction() {
         let mut query = valid_query();
         assert!(query.signature.is_none());
@@ -366,6 +429,20 @@ mod tests {
     }
 
     #[lyquid_test::test]
+    fn rejects_empty_query_text() {
+        // A digest-only query has no text for peers to search, so it must never
+        // reach the registry.
+        assert!(SearchQuery::new(b"", QueryParams { k: 10 }, 1, NodeID::new([9u8; 32])).is_err());
+    }
+
+    #[lyquid_test::test]
+    fn rejects_query_text_that_does_not_match_the_digest() {
+        let mut query = valid_query();
+        query.query_text = "different query".to_owned();
+        assert!(query.validate().is_err());
+    }
+
+    #[lyquid_test::test]
     fn rejects_duplicate_query_registration() {
         let query = valid_query();
         let mut registry = QueryRegistry::default();
@@ -373,11 +450,25 @@ mod tests {
         assert!(registry.insert(query).is_err());
     }
 
-    fn registered_query() -> (QueryRegistry, Hash, NodeID, Address) {
+    #[lyquid_test::test]
+    fn identical_queries_are_recognised_as_already_registered() {
+        let query = valid_query();
+        let mut registry = QueryRegistry::default();
+
+        assert!(!registry.contains_identical(&query));
+        registry.insert(query.clone()).unwrap();
+        assert!(registry.contains_identical(&query));
+
+        let mut same_id_different_signature = query.clone();
+        same_id_different_signature.set_signature(vec![1]);
+        assert!(!registry.contains_identical(&same_id_different_signature));
+    }
+
+    fn registered_query() -> (QueryRegistry, Hash, NodeID, NodeID) {
         let query = valid_query();
         let query_id = query.query_id;
         let initiator = NodeID::new([1u8; 32]);
-        let peer = Address::from([2u8; 20]);
+        let peer = NodeID::new([2u8; 32]);
 
         let mut registry = QueryRegistry::default();
         registry.insert(query).unwrap();
@@ -387,8 +478,6 @@ mod tests {
     #[lyquid_test::test]
     fn rejects_plan_for_unknown_query() {
         let mut registry = QueryRegistry::default();
-        let mut expected = new_hashset();
-        expected.insert(Address::from([2u8; 20]));
 
         assert!(
             registry
@@ -396,7 +485,6 @@ mod tests {
                     blake3::hash(b"unknown"),
                     NodeID::new([1u8; 32]),
                     Vec::new(),
-                    expected,
                     ChainPos::ZERO,
                 )
                 .is_err()
@@ -404,14 +492,12 @@ mod tests {
     }
 
     #[lyquid_test::test]
-    fn complete_only_after_all_expected_responders_submit() {
+    fn complete_only_after_all_expected_nodes_submit() {
         let (mut registry, query_id, initiator, peer) = registered_query();
-        let mut expected = new_hashset();
-        expected.insert(peer);
         let deadline = ChainPos::new(100, 0);
 
         registry
-            .plan(query_id, initiator, vec![initiator], expected, deadline)
+            .plan(query_id, initiator, vec![initiator], deadline)
             .unwrap();
 
         assert_eq!(registry.initiator_node(&query_id), Some(initiator));
@@ -422,24 +508,75 @@ mod tests {
         assert!(!registry.is_complete(&query_id, ChainPos::ZERO));
 
         registry.mark_responder(query_id, peer).unwrap();
+        assert!(!registry.is_complete(&query_id, ChainPos::ZERO));
+
+        registry.mark_responder(query_id, initiator).unwrap();
         assert!(registry.is_complete(&query_id, ChainPos::ZERO));
     }
 
     #[lyquid_test::test]
     fn deadline_completes_query_with_missing_responder() {
         let (mut registry, query_id, initiator, peer) = registered_query();
-        let mut expected = new_hashset();
-        expected.insert(peer);
         let deadline = ChainPos::new(100, 0);
 
         registry
-            .plan(query_id, initiator, vec![initiator], expected, deadline)
+            .plan(query_id, initiator, vec![peer], deadline)
             .unwrap();
 
         assert_eq!(registry.deadline(&query_id), Some(deadline));
         assert!(!registry.is_complete(&query_id, ChainPos::new(99, 0)));
+        assert!(!registry.deadline_passed(&query_id, ChainPos::new(99, 0)));
         assert!(registry.is_complete(&query_id, deadline));
+        assert!(registry.deadline_passed(&query_id, deadline));
         assert!(registry.is_complete(&query_id, ChainPos::new(101, 0)));
+    }
+
+    #[lyquid_test::test]
+    fn tracks_expected_peer_and_responder_counts() {
+        let (mut registry, query_id, initiator, peer) = registered_query();
+        let expected_node = NodeID::new([3u8; 32]);
+
+        registry
+            .plan(
+                query_id,
+                initiator,
+                vec![expected_node],
+                ChainPos::new(100, 0),
+            )
+            .unwrap();
+
+        assert_eq!(registry.expected_peer_count(&query_id), 1);
+        assert_eq!(registry.responder_count(&query_id), 0);
+
+        registry.mark_responder(query_id, peer).unwrap();
+        assert_eq!(registry.responder_count(&query_id), 1);
+    }
+
+    #[lyquid_test::test]
+    fn only_planned_peers_are_expected_responders() {
+        let (mut registry, query_id, initiator, peer) = registered_query();
+        let expected_node = NodeID::new([3u8; 32]);
+
+        assert!(!registry.is_expected_responder(&query_id, expected_node));
+
+        registry
+            .plan(
+                query_id,
+                initiator,
+                vec![expected_node],
+                ChainPos::new(100, 0),
+            )
+            .unwrap();
+
+        assert!(registry.is_expected_responder(&query_id, expected_node));
+        assert!(!registry.is_expected_responder(&query_id, peer));
+    }
+
+    #[lyquid_test::test]
+    fn unplanned_query_has_zero_peer_counts() {
+        let (registry, query_id, _, _) = registered_query();
+        assert_eq!(registry.expected_peer_count(&query_id), 0);
+        assert_eq!(registry.responder_count(&query_id), 0);
     }
 
     #[lyquid_test::test]
@@ -452,13 +589,7 @@ mod tests {
     fn empty_expected_set_is_complete() {
         let (mut registry, query_id, initiator, _) = registered_query();
         registry
-            .plan(
-                query_id,
-                initiator,
-                Vec::new(),
-                new_hashset(),
-                ChainPos::new(100, 0),
-            )
+            .plan(query_id, initiator, Vec::new(), ChainPos::new(100, 0))
             .unwrap();
 
         assert!(registry.is_complete(&query_id, ChainPos::ZERO));

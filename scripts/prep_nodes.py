@@ -2,18 +2,23 @@
 
 This performs the full local devnet preparation:
 
-1. Publish and deploy the repository's Lyquid with
-   ``shaker deploy Cargo.toml --reference <ref> -o json``, unless an existing
-   Lyquid ID is supplied with ``--lyquid-id``. Publishing to the devnet's OCI
-   registry lets the other nodes pull the image; without it only the node that
-   received the deploy can host the Lyquid.
-2. Discover the four node containers with ``docker container ls``.
-3. Read each node's ID from its container logs.
-4. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
+1. Discover the four node containers with ``docker container ls`` and read each
+   node's ID from its container logs.
+2. Publish and deploy the repository's Lyquid with
+   ``shaker deploy Cargo.toml --reference <ref> -i <constructor> -o json``,
+   unless an existing Lyquid ID is supplied with ``--lyquid-id``. The
+   constructor input ABI-encodes the node IDs as the search oracle committee and
+   the configured threshold. Publishing to the devnet's OCI registry lets the
+   other nodes pull the image; without it only the node that received the deploy
+   can host the Lyquid.
+3. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
    each node directory.
-5. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
+4. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
    ports, and selected fixture skill names for integration tests.
-6. Upload each node's fixture directory with ``uv run mead --upload-only``.
+5. Upload each node's fixture directory with ``uv run mead --upload-only``.
+
+The constructor only stages the oracle committee. Activate the first epoch and
+trigger node self-registration with ``scripts/setup_search.sh`` after deployment.
 
 Skills containing non-UTF-8 resources are excluded because the canonical skill
 format only supports text resources.
@@ -22,6 +27,7 @@ format only supports text resources.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -30,8 +36,11 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import httpx
 from rich import print
@@ -62,6 +71,11 @@ NODE_ID_RE = re.compile(
 )
 NODE_PORT_RE = re.compile(r":(?P<port>\d+)->10087/tcp")
 
+DEFAULT_ORACLE_THRESHOLD = 2
+NODE_ID_BYTES = 32
+DEFAULT_DEVNET_DIR = Path.home() / ".shakenup" / "ldk" / "docker" / "multi"
+DEFAULT_NODE_FUNDING_ETH = "10"
+
 
 @dataclass(frozen=True)
 class Node:
@@ -69,6 +83,36 @@ class Node:
     container: str
     node_id: str
     port: int
+
+
+def node_id_public_key(node_id: str) -> bytes:
+    """Decode a `Node-...` identifier to its 32-byte Ed25519 public key."""
+    label = node_id.removeprefix("Node-")
+    padding = "=" * ((8 - len(label) % 8) % 8)
+    try:
+        decoded = base64.b32decode(label.upper() + padding, casefold=True)
+    except Exception as error:
+        raise RuntimeError(f"invalid node ID {node_id!r}: {error}") from error
+    if len(decoded) < NODE_ID_BYTES:
+        raise RuntimeError(f"invalid node ID {node_id!r}: too short")
+    return decoded[:NODE_ID_BYTES]
+
+
+def encode_constructor_input(committee: list[str], threshold: int) -> str:
+    """ABI-encode `(bytes32[] committee, uint16 threshold)` for `shaker deploy -i`."""
+    if not committee:
+        raise ValueError("oracle committee must not be empty")
+    if not 0 < threshold <= len(committee):
+        raise ValueError(
+            f"threshold {threshold} must be between 1 and {len(committee)}"
+        )
+
+    keys = [node_id_public_key(node_id) for node_id in committee]
+    # Parameter head: offset to the dynamic array, then the uint16 threshold.
+    head = (64).to_bytes(32, "big") + threshold.to_bytes(32, "big")
+    # Dynamic array tail: length followed by one 32-byte word per element.
+    tail = len(keys).to_bytes(32, "big") + b"".join(keys)
+    return "0x" + (head + tail).hex()
 
 
 def run(
@@ -108,11 +152,27 @@ def parse_json_output(output: str) -> dict[str, object]:
     raise RuntimeError("command did not produce a JSON object")
 
 
-def deploy_lyquid() -> str:
+def deploy_lyquid(nodes: list[Node], threshold: int) -> str:
     reference = os.environ.get("LYQUID_REFERENCE", DEFAULT_LYQUID_REFERENCE)
+    committee = [node.node_id for node in sorted(nodes, key=lambda node: node.index)]
+    constructor_input = encode_constructor_input(committee, threshold)
     print(f"Deploying Cargo.toml to {reference}...")
+    print(f"Oracle committee ({threshold} of {len(committee)}):")
+    for node in sorted(nodes, key=lambda node: node.index):
+        print(f"  - {node.node_id}")
+    print(f"Constructor input: {constructor_input}")
     process = run(
-        ["shaker", "deploy", "Cargo.toml", "--reference", reference, "-o", "json"],
+        [
+            "shaker",
+            "deploy",
+            "Cargo.toml",
+            "--reference",
+            reference,
+            "-i",
+            constructor_input,
+            "-o",
+            "json",
+        ],
         capture_output=True,
     )
     if process.stderr:
@@ -190,6 +250,122 @@ def node_from_container(index: int, container: str, port: int) -> Node:
     node_id = node_id_from_logs(container)
     print(f"node{index}: {node_id} ({container}, port {port})")
     return Node(index=index, container=container, node_id=node_id, port=port)
+
+
+def find_anvil_container(explicit: str | None = None) -> str:
+    if explicit is not None:
+        return explicit
+    names = run(
+        ["docker", "container", "ls", "--format", "{{.Names}}"],
+        capture_output=True,
+    ).stdout.splitlines()
+    for name in names:
+        if "anvil" in name:
+            return name
+    raise RuntimeError("could not find the devnet anvil container")
+
+
+def node_submitter_address(anvil_container: str, private_key: str) -> str:
+    return run(
+        [
+            "docker",
+            "exec",
+            anvil_container,
+            "cast",
+            "wallet",
+            "address",
+            "--private-key",
+            private_key,
+        ],
+        capture_output=True,
+    ).stdout.strip()
+
+
+def cast_balance(anvil_container: str, address: str) -> int:
+    output = run(
+        [
+            "docker",
+            "exec",
+            anvil_container,
+            "cast",
+            "balance",
+            "--rpc-url",
+            "http://127.0.0.1:8545",
+            address,
+        ],
+        capture_output=True,
+    ).stdout.strip()
+    return int(output.split()[0])
+
+
+def fund_nodes(
+    nodes: list[Node],
+    devnet_dir: Path,
+    *,
+    anvil_container: str | None,
+    funding_eth: str,
+) -> None:
+    """Top up each node submitter from the first devnet submitter account."""
+    if not devnet_dir.is_dir():
+        print(f"Skipping node funding: {devnet_dir} does not exist")
+        return
+
+    configs: dict[int, dict[str, Any]] = {}
+    for node in nodes:
+        path = devnet_dir / f"node{node.index}.toml"
+        if not path.is_file():
+            print(f"Skipping node funding: {path} does not exist")
+            return
+        with path.open("rb") as file:
+            configs[node.index] = tomllib.load(file)
+
+    try:
+        funder_config = configs[1]["submitter"]["inline"]
+    except (KeyError, TypeError) as error:
+        raise RuntimeError(
+            f"could not read the node1 submitter key: {error}"
+        ) from error
+    if not isinstance(funder_config, str):
+        raise TypeError("node1 submitter.inline must be a string private key")
+
+    anvil = find_anvil_container(anvil_container)
+    funder = node_submitter_address(anvil, funder_config)
+    target_balance = int(Decimal(str(funding_eth)) * Decimal(10**18))
+    print(f"Funding node submitters from {funder} with {funding_eth} ETH minimum...")
+
+    for node in nodes:
+        config = configs[node.index]
+        try:
+            private_key = config["submitter"]["inline"]
+        except KeyError, TypeError:
+            print(f"node{node.index}: no submitter.inline private key; skipping")
+            continue
+        if not isinstance(private_key, str):
+            print(f"node{node.index}: invalid submitter.inline; skipping")
+            continue
+        address = node_submitter_address(anvil, private_key)
+        balance = cast_balance(anvil, address)
+        if balance >= target_balance:
+            print(f"node{node.index}: {address} already has {balance} wei")
+            continue
+        run(
+            [
+                "docker",
+                "exec",
+                anvil,
+                "cast",
+                "send",
+                "--rpc-url",
+                "http://127.0.0.1:8545",
+                "--private-key",
+                funder_config,
+                "--value",
+                f"{funding_eth}ether",
+                address,
+            ],
+            capture_output=True,
+        )
+        print(f"node{node.index}: funded {address} with {funding_eth} ETH")
 
 
 def has_only_text_resources(skill_dir: Path) -> bool:
@@ -371,23 +547,67 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--lyquid-id",
         help="Use an existing Lyquid ID instead of running `shaker deploy`.",
     )
+    parser.add_argument(
+        "--threshold",
+        type=int,
+        default=DEFAULT_ORACLE_THRESHOLD,
+        help=(
+            "Search oracle threshold passed to the constructor during deployment "
+            f"(default: {DEFAULT_ORACLE_THRESHOLD})."
+        ),
+    )
+    parser.add_argument(
+        "--devnet-dir",
+        type=Path,
+        default=Path(os.environ.get("LYQUOR_DEVNET_DIR", DEFAULT_DEVNET_DIR)),
+        help=(
+            "Directory containing node1.toml..nodeN.toml for devnet funding "
+            f"(default: {DEFAULT_DEVNET_DIR})."
+        ),
+    )
+    parser.add_argument(
+        "--funding-eth",
+        default=os.environ.get("NODE_FUNDING_ETH", DEFAULT_NODE_FUNDING_ETH),
+        help=(
+            "Minimum ETH balance for each node submitter, funded from node1 "
+            f"(default: {DEFAULT_NODE_FUNDING_ETH})."
+        ),
+    )
+    parser.add_argument(
+        "--anvil-container",
+        help="Anvil container name (default: auto-detect).",
+    )
+    parser.add_argument(
+        "--no-fund-nodes",
+        action="store_true",
+        help="Do not top up node submitter accounts.",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     args = parse_args()
-    if args.lyquid_id:
-        lyquid_id = args.lyquid_id
-        print(f"Using Lyquid: '{lyquid_id}'")
-    else:
-        lyquid_id = deploy_lyquid()
-        print(f"Deployed Lyquid: '{lyquid_id}'")
 
     containers = discover_node_containers()
     nodes = [
         node_from_container(index, *containers[index])
         for index in range(1, NODE_COUNT + 1)
     ]
+
+    if not args.no_fund_nodes:
+        fund_nodes(
+            nodes,
+            args.devnet_dir,
+            anvil_container=args.anvil_container,
+            funding_eth=str(args.funding_eth),
+        )
+
+    if args.lyquid_id:
+        lyquid_id = args.lyquid_id
+        print(f"Using Lyquid: '{lyquid_id}'")
+    else:
+        lyquid_id = deploy_lyquid(nodes, args.threshold)
+        print(f"Deployed Lyquid: '{lyquid_id}'")
 
     skills = supported_skills()
     assignments = select_fixture_skills(skills)

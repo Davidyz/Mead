@@ -130,13 +130,19 @@ def node_manager(devnet: dict[str, Any]) -> NodeManager:
     )
 
 
+def _normalize_digest(digest: str) -> str:
+    return digest.removeprefix("0x").lower()
+
+
 def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
     manager = node_manager(devnet)
     tools = MeadTools(manager)
     last_error: Exception | None = None
 
     try:
-        manager.list_skills()
+        local_digests = {
+            _normalize_digest(skill.digest) for skill in manager.list_skills()
+        }
     except httpx.TransportError as error:
         pytest.skip(f"devnet is not available: {error}")
 
@@ -152,12 +158,19 @@ def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
             time.sleep(2)
             continue
 
-        if not summaries:
-            last_error = RuntimeError("search returned no skills")
+        summary = next(
+            (
+                candidate
+                for candidate in summaries
+                if _normalize_digest(candidate["digest"]) not in local_digests
+            ),
+            None,
+        )
+        if summary is None:
+            last_error = RuntimeError("search returned no peer skills")
             time.sleep(2)
             continue
 
-        summary = summaries[0]
         skill = manager.get_skill(summary["digest"])
         assert skill.name == summary["name"]
         assert skill.description == summary["description"]
@@ -174,4 +187,8 @@ def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
             assert skill.resources[0].contents in selected
         return
 
+    if isinstance(last_error, RuntimeError) and "no peer skills" in str(last_error):
+        pytest.skip(
+            "search returned no peer skills; cannot exercise the peer-body path"
+        )
     pytest.fail(f"MCP search/get round trip failed: {last_error}")

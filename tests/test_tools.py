@@ -128,11 +128,18 @@ def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
     tools = MeadTools(manager)
     last_error: Exception | None = None
 
+    try:
+        manager.list_skills()
+    except httpx.TransportError as error:
+        pytest.skip(f"devnet is not available: {error}")
+
     # The first search after a fresh devnet can lose its peer replies while the
     # nodes warm up; retry with a fresh query.
     for attempt in range(3):
         try:
             summaries = tools.mcp_search_skills(f"skill tools {attempt}", top_k=5)
+        except httpx.TransportError as error:
+            pytest.skip(f"devnet is not available: {error}")
         except (httpx.HTTPError, RuntimeError) as error:
             last_error = error
             time.sleep(2)

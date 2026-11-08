@@ -1,3 +1,4 @@
+import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Self
@@ -40,6 +41,70 @@ class UploadSkillResponse:
         )
 
 
+@dataclass(frozen=True)
+class OracleStatus:
+    """The response returned by ``GET /oracle/status``."""
+
+    active: bool
+    epoch: int
+    source_active: bool
+    source_epoch: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        return cls(
+            active=bool(data.get("active", False)),
+            epoch=int(data.get("epoch", 0)),
+            source_active=bool(data.get("source_active", False)),
+            source_epoch=int(data.get("source_epoch", 0)),
+        )
+
+
+@dataclass(frozen=True)
+class ActivationResponse:
+    """The response returned by ``POST /oracle/activate``."""
+
+    status: str
+    epoch: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        return cls(
+            status=str(data.get("status", "")),
+            epoch=int(data.get("epoch", 0)),
+        )
+
+    @property
+    def active(self) -> bool:
+        return self.status == "active"
+
+
+@dataclass(frozen=True)
+class NodeRegistrationResponse:
+    """The response returned by ``POST /nodes/register``."""
+
+    status: str
+    method: str | None = None
+    node_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        return cls(
+            status=str(data.get("status", "")),
+            method=data.get("method"),
+            node_id=data.get("node_id"),
+        )
+
+
+@dataclass(frozen=True)
+class PrepareResult:
+    """The final state after ``NodeManager.prepare``."""
+
+    node_id: str
+    oracle: OracleStatus
+    nodes: list[str]
+
+
 def _strip_id_prefix(value: str, prefix: str) -> str:
     return value.strip().removeprefix(prefix)
 
@@ -70,6 +135,7 @@ class NodeManager:
     def __init__(self, cli_args: CLIArgs):
         self._server_url = cli_args.server_url.rstrip("/")
         self._host = _virtual_host(cli_args.lyquid_id, cli_args.node_id)
+        self._node_id = cli_args.node_id
 
     def _headers(self, *, content_type: str | None = None) -> dict[str, str]:
         headers = {"accept": "application/json"}
@@ -105,9 +171,166 @@ class NodeManager:
             response.raise_for_status()
         return UploadSkillResponse.from_dict(response.json())
 
+    def get_oracle_status(self) -> OracleStatus:
+        """Return the search oracle's activation state."""
+
+        response = httpx.get(
+            self._url("/oracle/status"),
+            headers=self._headers(),
+            timeout=5.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        return OracleStatus.from_dict(response.json())
+
+    def activate_oracle(self) -> ActivationResponse:
+        """Ask this node to activate the search oracle (idempotent)."""
+
+        response = httpx.post(
+            self._url("/oracle/activate"),
+            headers=self._headers(),
+            timeout=30.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        return ActivationResponse.from_dict(response.json())
+
+    def register_node(self) -> NodeRegistrationResponse:
+        """Ask this node to self-register (idempotent)."""
+
+        response = httpx.post(
+            self._url("/nodes/register"),
+            headers=self._headers(),
+            timeout=60.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        return NodeRegistrationResponse.from_dict(response.json())
+
+    def list_nodes(self) -> list[str]:
+        """Return the node IDs in the shared ``NodeRegistry``."""
+
+        response = httpx.get(
+            self._url("/nodes/list"),
+            headers=self._headers(),
+            timeout=5.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        return list(response.json().get("nodes", []))
+
+    def ensure_oracle_active(
+        self, *, activate: bool, timeout: float, poll_interval: float
+    ) -> OracleStatus:
+        """Wait until the search oracle is active.
+
+        When ``activate`` is true, also POST to ``/oracle/activate`` with
+        backoff while waiting. Use that only on a committee node.
+        """
+
+        deadline = time.monotonic() + timeout
+        next_post = time.monotonic()
+        backoff = 1.0
+        last_error = "no response"
+
+        while time.monotonic() < deadline:
+            try:
+                status = self.get_oracle_status()
+            except httpx.HTTPError as error:
+                last_error = str(error)
+            else:
+                if status.active:
+                    return status
+                last_error = f"epoch {status.epoch} source_epoch {status.source_epoch}"
+
+            if activate and time.monotonic() >= next_post:
+                try:
+                    self.activate_oracle()
+                except httpx.HTTPStatusError as error:
+                    if error.response.status_code == 503:
+                        try:
+                            body = error.response.json()
+                        except ValueError:
+                            body = {}
+                        if body.get("status") == "not_staged":
+                            raise RuntimeError(
+                                "search oracle is not staged; deploy with the "
+                                "constructor committee"
+                            ) from error
+                    last_error = str(error)
+                except httpx.HTTPError as error:
+                    last_error = str(error)
+                next_post = time.monotonic() + backoff
+                backoff = min(backoff * 2, 8.0)
+
+            time.sleep(poll_interval)
+
+        raise RuntimeError(
+            f"search oracle did not become active within {timeout:.0f}s: {last_error}"
+        )
+
+    def ensure_registered(self, *, timeout: float, poll_interval: float) -> list[str]:
+        """Wait until this node is in the shared ``NodeRegistry``."""
+
+        if not self._node_id:
+            raise ValueError("node id is required to prepare a node")
+
+        deadline = time.monotonic() + timeout
+        next_post = time.monotonic()
+        backoff = 1.0
+        last_error = "no response"
+
+        while time.monotonic() < deadline:
+            if time.monotonic() >= next_post:
+                try:
+                    response = self.register_node()
+                except httpx.HTTPError as error:
+                    last_error = str(error)
+                else:
+                    if response.status in ("registered", "submitted"):
+                        try:
+                            nodes = self.list_nodes()
+                        except httpx.HTTPError as error:
+                            last_error = str(error)
+                        else:
+                            if self._node_id in nodes:
+                                return nodes
+                            last_error = (
+                                f"node {self._node_id} is not in the "
+                                f"{len(nodes)} registered nodes"
+                            )
+                next_post = time.monotonic() + backoff
+                backoff = min(backoff * 2, 8.0)
+
+            time.sleep(poll_interval)
+
+        raise RuntimeError(
+            f"node was not registered within {timeout:.0f}s: {last_error}"
+        )
+
+    def prepare(
+        self, *, activate_oracle: bool, timeout: float, poll_interval: float
+    ) -> PrepareResult:
+        """Wait for the oracle and self-register, returning the final state."""
+
+        if not self._node_id or self._host is None:
+            raise ValueError("node-id and lyquid-id are required to prepare a node")
+
+        oracle = self.ensure_oracle_active(
+            activate=activate_oracle,
+            timeout=timeout,
+            poll_interval=poll_interval,
+        )
+        nodes = self.ensure_registered(timeout=timeout, poll_interval=poll_interval)
+        return PrepareResult(node_id=self._node_id, oracle=oracle, nodes=nodes)
+
 
 __all__ = [
+    "ActivationResponse",
     "NodeManager",
+    "NodeRegistrationResponse",
+    "OracleStatus",
+    "PrepareResult",
     "SkillSummary",
     "UploadSkillResponse",
 ]

@@ -48,3 +48,45 @@ The `Lyquid-` and `Node-` display prefixes are optional. The command builds the
 virtual host header (`<lyquid-label>.<node-label>`) required to route requests
 to a node directly, and prints how many local skills were loaded and uploaded
 plus the node's current skill count.
+
+## Preparing a Node for Search
+
+`--prepare-only` uploads the local skills, waits for the search oracle, asks the
+node to self-register, and exits without starting the MCP. It is the per-node
+counterpart to the `prepare-nodes` devnet bootstrap: the Lyquid must already be
+deployed with its constructor-staged committee.
+
+On a committee node (and only there), let the MCP drive activation:
+
+```bash
+uv run mead \
+  --prepare-only \
+  --activate-oracle \
+  --server-url http://127.0.0.1:10087 \
+  --skill-dir /path/to/skills \
+  --node-id '<NODE_ID>' \
+  --lyquid-id '<LYQUID_ID>'
+```
+
+On every other node, omit `--activate-oracle`; the command waits for the oracle
+to become active, then self-registers:
+
+```bash
+uv run mead \
+  --prepare-only \
+  --server-url http://127.0.0.1:11087 \
+  --skill-dir /path/to/skills \
+  --node-id '<NODE_ID>' \
+  --lyquid-id '<LYQUID_ID>'
+```
+
+Useful flags:
+
+- `--wait-timeout` (default `120`): seconds to wait for oracle activation and,
+  separately, for the `NodeRegistry` to include the node.
+- `--poll-interval` (default `1.0`): seconds between status checks.
+
+The command is idempotent and safe to rerun: an active oracle and a registered
+node return immediately. It exits `0` when the node is ready, and non-zero with
+the last HTTP error/timeout otherwise. `--upload-only` and `--prepare-only` are
+mutually exclusive; `--activate-oracle` requires `--prepare-only`.

@@ -84,3 +84,58 @@ def test_upload_skill_round_trips_through_live_node(
         candidate.name == skill.name and candidate.digest == response.digests[0]
         for candidate in skills
     )
+
+
+def test_oracle_status_is_active(devnet: dict[str, Any]) -> None:
+    manager, _ = node_manager(devnet, 1)
+
+    try:
+        status = manager.get_oracle_status()
+    except httpx.TransportError as error:
+        pytest.skip(f"devnet is not available: {error}")
+
+    assert status.active is True
+    assert status.epoch >= 1
+    assert status.source_active is True
+    assert status.source_epoch == status.epoch
+
+
+def test_activate_oracle_is_idempotent(devnet: dict[str, Any]) -> None:
+    manager, _ = node_manager(devnet, 1)
+
+    try:
+        first = manager.activate_oracle()
+        second = manager.activate_oracle()
+    except httpx.TransportError as error:
+        pytest.skip(f"devnet is not available: {error}")
+
+    assert first.status == "active"
+    assert second.status == "active"
+
+
+def test_register_node_is_idempotent(devnet: dict[str, Any]) -> None:
+    manager, node = node_manager(devnet, 1)
+
+    try:
+        first = manager.register_node()
+        second = manager.register_node()
+        nodes = manager.list_nodes()
+    except httpx.TransportError as error:
+        pytest.skip(f"devnet is not available: {error}")
+
+    assert first.status in {"registered", "submitted"}
+    assert second.status in {"registered", "submitted"}
+    assert node["node_id"] in nodes
+
+
+def test_prepare_is_idempotent(devnet: dict[str, Any]) -> None:
+    manager, node = node_manager(devnet, 1)
+
+    try:
+        result = manager.prepare(activate_oracle=True, timeout=30.0, poll_interval=0.5)
+    except httpx.TransportError as error:
+        pytest.skip(f"devnet is not available: {error}")
+
+    assert result.node_id == node["node_id"]
+    assert result.oracle.active is True
+    assert result.node_id in result.nodes

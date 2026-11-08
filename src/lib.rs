@@ -72,6 +72,141 @@ fn constructor(ctx: &mut _, committee: Vec<NodeID>, threshold: u16) {
     }
 }
 
+/// Builds the oracle target for the `search` topic on this Lyquid.
+fn search_oracle_target(lyquid_id: LyquidID) -> LyquidResult<OracleTarget> {
+    Ok(OracleTarget {
+        seq_id: lyquor_api::sequence_backend_id()?,
+        target: OracleServiceTarget::LVM(lyquid_id),
+    })
+}
+
+/// Returns the search oracle's current destination epoch (0 when not active).
+fn search_oracle_epoch(target: OracleTarget) -> LyquidResult<u32> {
+    Ok(
+        lyquor_api::fetch_oracle_info("search".to_owned(), target, false)?
+            .map(|info| info.epoch)
+            .unwrap_or(0),
+    )
+}
+
+fn oracle_activation_response(status: u16, state: &str, epoch: u32) -> http::Response {
+    let body = serde_json::json!({
+        "status": state,
+        "epoch": epoch,
+    })
+    .to_string();
+    http_json_response(status, &body)
+}
+
+/// Submits a finalize certificate for the search oracle epoch.
+///
+/// `finalize_epoch` always builds a certificate while the source config is
+/// valid, so its return value cannot tell us whether finalization is still
+/// pending. Callers should gate on the source epoch instead (see
+/// `StateVar::get_epoch`). Submission errors are propagated so the endpoint can
+/// report a failed finalize instead of returning `202` forever.
+fn submit_search_oracle_finalize(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    target: OracleTarget,
+) -> LyquidResult<()> {
+    let oracle = ctx.network.search.clone();
+    if let Some(call) = oracle.finalize_epoch(ctx, target)? {
+        submit_certified_call!(call)?;
+    }
+    Ok(())
+}
+
+// Activates the search oracle's first epoch.
+//
+// `POST /oracle/activate`
+//
+// The constructor only stages the committee; the topic cannot certify calls
+// until the first epoch advance/finalize round settles. This endpoint performs
+// that round. It is idempotent: an already-active oracle returns 200
+// immediately and submits no calls.
+//
+// The certified epoch calls execute asynchronously, so this returns `202` until
+// they settle. Poll this endpoint (or `GET /oracle/status`) until `200`; each
+// call submits only the work that is still needed.
+//
+// Response - `200 OK` (already active or fully active by the time the call
+// returned):
+// { "status": "active", "epoch": 1 }
+//
+// Response - `202 Accepted` (activation in progress; retry):
+// { "status": "activating", "epoch": 0 }
+//
+// Errors:
+// - `502`: submitting the certified epoch advance or finalize failed.
+// - `503`: the oracle is not staged.
+#[method::instance(export = http, method = "POST", path_prefix = "/oracle/activate")]
+fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
+    let target = search_oracle_target(ctx.lyquid_id)?;
+    let oracle = ctx.network.search.clone();
+
+    let mut epoch = search_oracle_epoch(target)?;
+    if epoch == 0 {
+        let Some(call) = oracle.advance_epoch(&mut ctx, target)? else {
+            return Ok(oracle_activation_response(503, "not_staged", 0));
+        };
+        if let Err(error) = submit_certified_call!(call) {
+            return Ok(http_json_response(
+                502,
+                &json_error(&format!(
+                    "failed to submit the search oracle epoch advance: {error}"
+                )),
+            ));
+        }
+        epoch = search_oracle_epoch(target)?;
+    }
+
+    if epoch > 0 {
+        // Certification needs the source-side config at the *same* epoch. A
+        // non-empty committee from an older epoch is not enough if the
+        // destination advanced again.
+        let source_active = ctx.network.search.get_epoch(&ctx, target) == epoch;
+        if source_active {
+            return Ok(oracle_activation_response(200, "active", epoch));
+        }
+        if let Err(error) = submit_search_oracle_finalize(&mut ctx, target) {
+            return Ok(http_json_response(
+                502,
+                &json_error(&format!(
+                    "failed to submit the search oracle epoch finalize: {error}"
+                )),
+            ));
+        }
+    }
+
+    Ok(oracle_activation_response(202, "activating", epoch))
+}
+
+// Reports whether the search oracle is active.
+//
+// `GET /oracle/status`
+//
+// `active` is true when the destination epoch is non-zero and the source's
+// finalized epoch matches it. `source_active` reports that match and
+// `source_epoch` reports the source's finalized epoch.
+//
+// Response - `200 OK`:
+// { "active": false, "epoch": 0, "source_active": false, "source_epoch": 0 }
+#[method::instance(export = http, method = "GET", path_prefix = "/oracle/status")]
+fn search_oracle_status(ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
+    let target = search_oracle_target(ctx.lyquid_id)?;
+    let epoch = search_oracle_epoch(target)?;
+    let source_epoch = ctx.network.search.get_epoch(&ctx, target);
+    let source_active = epoch > 0 && source_epoch == epoch;
+    let body = serde_json::json!({
+        "active": source_active,
+        "epoch": epoch,
+        "source_active": source_active,
+        "source_epoch": source_epoch,
+    })
+    .to_string();
+    Ok(http_json_response(200, &body))
+}
+
 // Registers a node identity through a certified oracle call.
 //
 // The node's local `/nodes/register` endpoint obtains a certificate for this
@@ -151,11 +286,19 @@ fn submit_node_registry_change(
 //
 // `POST /nodes/register`
 //
-// No request body is required. The endpoint certifies and submits
-// `register_node(ctx.node_id)` for the node hosting this endpoint. It requires
-// an active search oracle, and repeated calls are safe.
+// No request body is required. If the node is already registered, returns `200`
+// immediately without certifying anything. Otherwise the endpoint certifies and
+// submits `register_node(ctx.node_id)` for the node hosting this endpoint and
+// returns `202`. It requires an active search oracle.
 //
-// Response - `202 Accepted`:
+// Response - `200 OK` (already registered):
+// {
+//   "status": "registered",
+//   "method": "register_node",
+//   "node_id": "Node-..."
+// }
+//
+// Response - `202 Accepted` (registration submitted):
 // {
 //   "status": "submitted",
 //   "method": "register_node",
@@ -168,6 +311,20 @@ fn submit_node_registry_change(
 #[method::instance(export = http, method = "POST", path_prefix = "/nodes/register")]
 fn register_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
     let node = ctx.node_id;
+
+    // Cheap idempotency fast path: a restarted MCP or a repeated bootstrap call
+    // should not trigger a committee certification round and a sequenced
+    // transaction when the node is already in the registry.
+    if ctx.network.node_registry.contains(&node) {
+        let body = serde_json::json!({
+            "status": "registered",
+            "method": "register_node",
+            "node_id": node.to_string(),
+        })
+        .to_string();
+        return Ok(http_json_response(200, &body));
+    }
+
     submit_node_registry_change(&mut ctx, "register_node", node)
 }
 
@@ -821,11 +978,16 @@ fn get_skill_count(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Respo
 // }
 // ```
 //
+// `202` means the certified `coordinate_search` call was submitted, not that the
+// query is registered yet. Poll `POST /search/status` until it returns `200`
+// before expecting peers to answer.
+//
 // Errors:
 // - `400`: missing/invalid JSON, empty query, or invalid `k`.
 // - `500`: certification failed unexpectedly.
 // - `502`: submitting the certified call failed.
-// - `503`: search certification is unavailable (search oracle not configured).
+// - `503`: the search oracle is not active; call `POST /oracle/activate` and
+//   retry.
 #[method::instance(export = http, method = "POST", path_prefix = "/search/new")]
 fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
     let request = match parse_search_endpoint_request(req.body.as_deref()) {
@@ -836,6 +998,14 @@ fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Re
     let params = QueryParams { k: request.k };
     if let Err(error) = params.validate() {
         return Ok(http_json_response(400, &json_error(&error.to_string())));
+    }
+
+    let target = search_oracle_target(ctx.lyquid_id)?;
+    if search_oracle_epoch(target)? == 0 {
+        return Ok(http_json_response(
+            503,
+            &json_error("search oracle is not active; call POST /oracle/activate and retry"),
+        ));
     }
 
     let sender = ctx.node_id;
@@ -852,10 +1022,6 @@ fn search_new_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Re
     query.set_signature(signature);
 
     let query_id = query.query_id;
-    let target = OracleTarget {
-        seq_id: lyquor_api::sequence_backend_id()?,
-        target: OracleServiceTarget::LVM(ctx.lyquid_id),
-    };
     let origin = Address::from(ctx.lyquid_id);
     let oracle = ctx.network.search.clone();
     let call = match oracle.certify(

@@ -8,22 +8,18 @@ LYQUID_ID ?=
 PREP_NODES_ARGS := $(if $(LYQUID_ID),--lyquid-id $(LYQUID_ID),)
 
 
-.PHONY: prepare-skills prepare-nodes setup-search check-ldk test cleanup
+.PHONY: prepare-skills prepare-nodes check-ldk test cleanup
 
 prepare-skills: cleanup
 	uv sync --group dev
 	@python ./scripts/prep_skills.py
 
-# Prepare per-node fixtures and upload them to the devnet. This requires the
-# stock multi-node Docker devnet from the LDK to be running.
+# Prepare per-node fixtures, upload skills, activate the search oracle, and
+# self-register every node. This requires the stock multi-node Docker devnet
+# from the LDK to be running.
 prepare-nodes: tests/skills/skills
 	@echo "This requires the stock multi-node Docker devnet from the LDK to be running."
 	uv run python ./scripts/prep_nodes.py $(PREP_NODES_ARGS)
-
-# Activate the constructor-staged search oracle and self-register each node.
-# Run this after `make prepare-nodes` (or after deploying with a committee).
-setup-search:
-	@scripts/setup_search.sh
 
 cleanup:
 	[ ! -d ./tests/skills/ ] || rm -rf ./tests/skills/

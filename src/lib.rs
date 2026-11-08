@@ -833,12 +833,18 @@ fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Res
     let completed = ctx.network.query_registry.is_complete(&query_id, position);
     let received_results = ctx.network.result_registry.count_for_query(&query_id);
     let expected_results = ctx.network.query_registry.expected_peer_count(&query_id);
+    let timed_out = ctx
+        .network
+        .query_registry
+        .deadline_passed(&query_id, position)
+        && received_results < expected_results;
 
     Ok(search_status_response(
         query_id,
         completed,
         received_results,
         expected_results,
+        timed_out,
     ))
 }
 
@@ -893,7 +899,15 @@ fn search_get_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Respon
         combined.push(local_result);
     }
 
-    Ok(search_results_response(query_id, &combined))
+    let expected_results = ctx.network.query_registry.expected_peer_count(&query_id);
+    let received_results = ctx.network.query_registry.responder_count(&query_id);
+    let timed_out = ctx
+        .network
+        .query_registry
+        .deadline_passed(&query_id, position)
+        && received_results < expected_results;
+
+    Ok(search_results_response(query_id, &combined, timed_out))
 }
 
 // Runs the query against this node's own skill catalog when the initiator

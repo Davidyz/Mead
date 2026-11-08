@@ -75,11 +75,13 @@ pub(crate) fn search_status_response(
     completed: bool,
     received_results: usize,
     expected_results: usize,
+    timed_out: bool,
 ) -> http::Response {
     let body = serde_json::json!({
         "status": if completed { "completed" } else { "pending" },
         "query_id": query_id.to_string(),
         "completed": completed,
+        "timed_out": timed_out,
         "received_results": received_results,
         "expected_results": expected_results,
     })
@@ -104,7 +106,11 @@ pub(crate) fn search_pending_response(
     http_json_response(409, &body)
 }
 
-pub(crate) fn search_results_response(query_id: Hash, results: &[&SearchResult]) -> http::Response {
+pub(crate) fn search_results_response(
+    query_id: Hash,
+    results: &[&SearchResult],
+    timed_out: bool,
+) -> http::Response {
     let verified: Vec<&SearchResult> = results
         .iter()
         .copied()
@@ -117,6 +123,7 @@ pub(crate) fn search_results_response(query_id: Hash, results: &[&SearchResult])
         "status": "completed",
         "query_id": query_id.to_string(),
         "completed": true,
+        "timed_out": timed_out,
         "verified_results": verified.len(),
         "rejected_results": rejected_results,
         "results": verified,

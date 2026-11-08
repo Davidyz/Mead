@@ -148,6 +148,13 @@ impl QueryRegistry {
         self.initiator_index.get(query_id).copied()
     }
 
+    /// Returns true once the chain position has passed this query's deadline.
+    pub fn deadline_passed(&self, query_id: &Hash, position: ChainPos) -> bool {
+        self.deadline_index
+            .get(query_id)
+            .is_some_and(|deadline| *deadline <= position)
+    }
+
     /// Returns the chain position after which the query stops waiting for
     /// missing responders.
     pub fn deadline(&self, query_id: &Hash) -> Option<ChainPos> {
@@ -173,9 +180,7 @@ impl QueryRegistry {
             return true;
         }
 
-        self.deadline_index
-            .get(query_id)
-            .is_some_and(|deadline| *deadline <= position)
+        self.deadline_passed(query_id, position)
     }
 
     /// Returns the number of peers expected to process this query.
@@ -520,7 +525,9 @@ mod tests {
 
         assert_eq!(registry.deadline(&query_id), Some(deadline));
         assert!(!registry.is_complete(&query_id, ChainPos::new(99, 0)));
+        assert!(!registry.deadline_passed(&query_id, ChainPos::new(99, 0)));
         assert!(registry.is_complete(&query_id, deadline));
+        assert!(registry.deadline_passed(&query_id, deadline));
         assert!(registry.is_complete(&query_id, ChainPos::new(101, 0)));
     }
 

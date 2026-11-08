@@ -171,14 +171,27 @@ fn rejects_missing_and_malformed_query_ids() {
 #[lyquid_test::test]
 fn search_status_response_reports_progress() {
     let query_id = blake3::hash(b"query");
-    let response = search_status_response(query_id, false, 2, 4);
+    let response = search_status_response(query_id, false, 2, 4, false);
     let body = response_json(&response);
 
     assert_eq!(response.status, 200);
     assert_eq!(body["status"].as_str(), Some("pending"));
     assert_eq!(body["completed"].as_bool(), Some(false));
+    assert_eq!(body["timed_out"].as_bool(), Some(false));
     assert_eq!(body["received_results"].as_u64(), Some(2));
     assert_eq!(body["expected_results"].as_u64(), Some(4));
+}
+
+#[lyquid_test::test]
+fn search_status_response_reports_a_timeout() {
+    let query_id = blake3::hash(b"query");
+    let response = search_status_response(query_id, true, 1, 3, true);
+    let body = response_json(&response);
+
+    assert_eq!(body["status"].as_str(), Some("completed"));
+    assert_eq!(body["completed"].as_bool(), Some(true));
+    assert_eq!(body["timed_out"].as_bool(), Some(true));
+    assert_eq!(body["received_results"].as_u64(), Some(1));
 }
 
 #[lyquid_test::test]
@@ -197,11 +210,12 @@ fn search_pending_response_returns_409() {
 #[lyquid_test::test]
 fn search_results_response_contains_results() {
     let query_id = blake3::hash(b"query");
-    let response = search_results_response(query_id, &[]);
+    let response = search_results_response(query_id, &[], false);
     let body = response_json(&response);
 
     assert_eq!(response.status, 200);
     assert_eq!(body["completed"].as_bool(), Some(true));
+    assert_eq!(body["timed_out"].as_bool(), Some(false));
     assert_eq!(body["results"].as_array().map(Vec::len), Some(0));
     assert_eq!(body["aggregated"].as_array().map(Vec::len), Some(0));
     assert_eq!(body["verified_results"].as_u64(), Some(0));

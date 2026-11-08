@@ -18,6 +18,8 @@ For example, in pi-agent, use the following:
         "--from",
         "git+https://github.com/Davidyz/Mead.git",
         "mead",
+        "--skill-dir",
+        "<SKILL_DIR>",
         "--node-id",
         "<NODE_ID>",
         "--lyquid-id",

@@ -55,10 +55,10 @@ pub(crate) fn parse_skill_get_request(body: Option<&[u8]>) -> Result<Hash, Strin
 
 /// Serves the full body of a skill by digest.
 ///
-/// Peer-provided skills are served from the process-wide cache populated when
-/// their bodies arrive during a search UPC. Locally uploaded skills fall back to
-/// the node-local catalog. The body uses the same JSON skill structure accepted
-/// by `POST /skills/upload`.
+/// Peer-provided skills are served from the per-call cache or the peer bodies
+/// persisted in instance state when results arrive during a search UPC. Locally
+/// uploaded skills fall back to the node-local catalog. The body uses the same
+/// JSON skill structure accepted by `POST /skills/upload`.
 pub(crate) fn handle_skill_get(
     ctx: &mut crate::__lyquid::InstanceContext,
     req: &http::Request,
@@ -69,6 +69,21 @@ pub(crate) fn handle_skill_get(
     };
 
     if let Some(skill) = AcquiredSkills::shared().get(&digest) {
+        return skill_json_response(&skill);
+    }
+
+    let acquired_blob = {
+        let blobs = ctx.instance.acquired_skill_blobs.read();
+        blobs.get(&digest).cloned()
+    };
+    if let Some(bytes) = acquired_blob {
+        let skill = match Skill::from_canonical_bytes(&bytes) {
+            Ok(skill) => skill,
+            Err(error) => {
+                return Ok(http_json_response(500, &json_error(&error.to_string())));
+            }
+        };
+        AcquiredSkills::shared().record(digest, &skill);
         return skill_json_response(&skill);
     }
 

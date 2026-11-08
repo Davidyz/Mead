@@ -50,6 +50,10 @@ state! {
     // Canonical skill bytes persisted in instance state so the in-memory
     // manager can be rebuilt after the Lyquid VM restarts.
     instance skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
+    // Peer-provided skill bytes persisted for `/skills/get`. The in-memory
+    // acquired cache is per-call, so it cannot span the search trigger and a
+    // later HTTP request.
+    instance acquired_skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
 }
 
 // Stages the initial search oracle committee at deployment or code upgrade.
@@ -714,6 +718,7 @@ fn submit_peer_result_impl(
 
     let mut matched_skills = Vec::with_capacity(result.matches.len());
     let mut matched_digests = Vec::with_capacity(result.matches.len());
+    let mut matched_blobs = Vec::with_capacity(result.matches.len());
     for (skill_match, body) in result.matches.iter().zip(skill_bodies.iter()) {
         let skill =
             Skill::from_canonical_bytes(body).map_err(|error| invalid_input(error.to_string()))?;
@@ -724,6 +729,7 @@ fn submit_peer_result_impl(
             return Err(invalid_input("skill body does not match the match digest"));
         }
         matched_digests.push(digest);
+        matched_blobs.push(body.clone());
         matched_skills.push(skill);
     }
 
@@ -742,11 +748,19 @@ fn submit_peer_result_impl(
         }
     }
 
-    // Cache peer bodies only after every verification step passes, so rejected
-    // replies cannot populate `/skills/get`. They stay out of the local BM25
-    // corpus.
-    for (digest, skill) in matched_digests.iter().zip(matched_skills.iter()) {
-        AcquiredSkills::shared().record(*digest, skill);
+    // Persist and cache peer bodies only after every verification step passes,
+    // so rejected replies cannot populate `/skills/get`. They stay out of the
+    // local BM25 corpus.
+    {
+        let mut blobs = ctx.instance.acquired_skill_blobs.write();
+        for ((digest, body), skill) in matched_digests
+            .iter()
+            .zip(matched_blobs.iter())
+            .zip(matched_skills.iter())
+        {
+            blobs.insert(*digest, body.clone());
+            AcquiredSkills::shared().record(*digest, skill);
+        }
     }
 
     let target = OracleTarget {
@@ -1284,9 +1298,9 @@ fn list_skills(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response>
 // - `400 Bad Request`: missing, empty, or invalid digest.
 // - `404 Not Found`: no skill with that digest is cached or loaded locally.
 //
-// Peer skills are served from the process-wide cache populated when their
-// bodies arrive during a search UPC; locally uploaded skills fall back to this
-// node's catalog.
+// Peer skills are served from the per-call cache or the peer bodies persisted
+// when they arrive during a search UPC; locally uploaded skills fall back to
+// this node's catalog.
 #[method::instance(export = http, method = "POST", path_prefix = "/skills/get")]
 fn get_skill_at_skills_get(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
     handle_skill_get(&mut ctx, &req)

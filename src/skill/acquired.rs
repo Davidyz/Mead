@@ -2,8 +2,10 @@
 //!
 //! This cache is intentionally separate from [`super::SkillManager`]: a skill
 //! learned from a peer must be downloadable later without becoming part of this
-//! node's local search corpus (which would change future BM25 results). It is
-//! not persisted in instance state; it is rebuilt as peers answer new searches.
+//! node's local search corpus (which would change future BM25 results). Peer
+//! bytes are also persisted in instance state because guest statics do not span
+//! the search trigger and a later HTTP request; this cache is the per-call view
+//! of those bytes.
 
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -11,10 +13,10 @@ use lyquid::prelude::{Hash, HashMap, new_hashmap};
 
 use super::Skill;
 
-// TODO: bound this cache. There is no direct fetch-by-digest path to another
-// node yet, so evicting an entry would make a skill whose digest the caller
-// still holds unavailable until another search returns it. Revisit once direct
-// skill retrieval exists.
+// TODO: bound retained skill bodies. There is no direct fetch-by-digest path to
+// another node yet, so evicting an entry would make a skill whose digest the
+// caller still holds unavailable until another search returns it. Revisit once
+// direct skill retrieval exists.
 static ACQUIRED: OnceLock<AcquiredSkills> = OnceLock::new();
 
 /// Digest-indexed cache of verified skill bodies learned from peer replies.

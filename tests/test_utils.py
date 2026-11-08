@@ -46,3 +46,16 @@ def test_upload_only_and_prepare_only_are_mutually_exclusive() -> None:
 def test_activate_oracle_requires_prepare_only() -> None:
     with pytest.raises(SystemExit):
         parse_args(_base_args("--activate-oracle"))
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ("--wait-timeout", "0"),
+        ("--poll-interval", "0"),
+        ("--poll-interval", "-1"),
+    ],
+)
+def test_prepare_only_rejects_non_positive_intervals(flags: tuple[str, str]) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(_base_args("--prepare-only", *flags))

@@ -11,6 +11,8 @@ from mead.node_manager import (
     OracleStatus,
     SkillSummary,
     UploadSkillResponse,
+    _sleep_until,
+    _validate_wait,
 )
 from mead.skills import Skill
 from mead.utils import CLIArgs
@@ -177,3 +179,31 @@ def test_prepare_accepts_a_prefixless_node_id(
 
     assert result.node_id == canonical
     assert canonical in result.nodes
+
+
+def test_sleep_until_is_clamped_to_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    sleeps: list[float] = []
+    monkeypatch.setattr("mead.node_manager.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        "mead.node_manager.time.sleep", lambda seconds: sleeps.append(seconds)
+    )
+
+    _sleep_until(102.0, 10.0)
+    assert sleeps == [2.0]
+
+    _sleep_until(99.0, 10.0)
+    assert sleeps == [2.0]
+
+
+@pytest.mark.parametrize(
+    "timeout,poll_interval",
+    [(0.0, 1.0), (1.0, 0.0), (-1.0, 1.0), (1.0, -1.0)],
+)
+def test_validate_wait_rejects_non_positive_values(
+    timeout: float, poll_interval: float
+) -> None:
+    with pytest.raises(ValueError):
+        _validate_wait(timeout, poll_interval)

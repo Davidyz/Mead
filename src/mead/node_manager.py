@@ -109,6 +109,19 @@ def _strip_id_prefix(value: str, prefix: str) -> str:
     return value.strip().removeprefix(prefix)
 
 
+def _validate_wait(timeout: float, poll_interval: float) -> None:
+    if timeout <= 0:
+        raise ValueError("timeout must be greater than zero")
+    if poll_interval <= 0:
+        raise ValueError("poll_interval must be greater than zero")
+
+
+def _sleep_until(deadline: float, interval: float) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        time.sleep(min(interval, remaining))
+
+
 def _canonical_node_id(node_id: str | None) -> str | None:
     if not node_id:
         return None
@@ -234,6 +247,7 @@ class NodeManager:
         backoff while waiting. Use that only on a committee node.
         """
 
+        _validate_wait(timeout, poll_interval)
         deadline = time.monotonic() + timeout
         next_post = time.monotonic()
         backoff = 1.0
@@ -269,7 +283,7 @@ class NodeManager:
                 next_post = time.monotonic() + backoff
                 backoff = min(backoff * 2, 8.0)
 
-            time.sleep(poll_interval)
+            _sleep_until(deadline, poll_interval)
 
         raise RuntimeError(
             f"search oracle did not become active within {timeout:.0f}s: {last_error}"
@@ -280,6 +294,7 @@ class NodeManager:
 
         if not self._node_id:
             raise ValueError("node id is required to prepare a node")
+        _validate_wait(timeout, poll_interval)
 
         deadline = time.monotonic() + timeout
         next_post = time.monotonic()
@@ -308,7 +323,7 @@ class NodeManager:
                 next_post = time.monotonic() + backoff
                 backoff = min(backoff * 2, 8.0)
 
-            time.sleep(poll_interval)
+            _sleep_until(deadline, poll_interval)
 
         raise RuntimeError(
             f"node was not registered within {timeout:.0f}s: {last_error}"

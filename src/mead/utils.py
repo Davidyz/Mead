@@ -73,6 +73,10 @@ def parse_args(args: list[str] | None = None) -> CLIArgs:
     parsed = parser.parse_args(args)
     if parsed.activate_oracle and not parsed.prepare_only:
         parser.error("--activate-oracle requires --prepare-only")
+    if parsed.wait_timeout <= 0:
+        parser.error("--wait-timeout must be greater than zero")
+    if parsed.poll_interval <= 0:
+        parser.error("--poll-interval must be greater than zero")
     return CLIArgs(
         server_url=parsed.server_url,
         skill_dir=Path(parsed.skill_dir),

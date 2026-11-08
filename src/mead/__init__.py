@@ -39,6 +39,7 @@ async def main_coro() -> None:
         sys.exit(return_val)
 
     if cli_args.prepare_only:
+        print(f"Loaded {len(loaded_skills)} skills.")
         if uploaded_skill_count != len(loaded_skills):
             print(f"Only {uploaded_skill_count} skills were uploaded successfully.")
             sys.exit(1)

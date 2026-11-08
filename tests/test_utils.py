@@ -59,3 +59,15 @@ def test_activate_oracle_requires_prepare_only() -> None:
 def test_prepare_only_rejects_non_positive_intervals(flags: tuple[str, str]) -> None:
     with pytest.raises(SystemExit):
         parse_args(_base_args("--prepare-only", *flags))
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["--skill-dir", "--node-id", "--lyquid-id"],
+)
+def test_required_arguments_are_validated(missing: str) -> None:
+    args = _base_args()
+    index = args.index(missing)
+    del args[index : index + 2]
+    with pytest.raises(SystemExit):
+        parse_args(args)

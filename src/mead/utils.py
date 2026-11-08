@@ -23,7 +23,9 @@ def arg_parser() -> ArgumentParser:
         "--server-url", help="URL to the lyquid node.", default="http://127.0.0.1:10087"
     )
     parser.add_argument(
-        "--skill-dir", help="Path to the directory that contains skills."
+        "--skill-dir",
+        required=True,
+        help="Path to the directory that contains skills.",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -63,8 +65,8 @@ def arg_parser() -> ArgumentParser:
         help="Seconds between status/registry polls in --prepare-only mode.",
     )
 
-    parser.add_argument("--node-id", help="ID of the lyquid node.")
-    parser.add_argument("--lyquid-id", help="Lyquid ID to use.")
+    parser.add_argument("--node-id", required=True, help="ID of the lyquid node.")
+    parser.add_argument("--lyquid-id", required=True, help="Lyquid ID to use.")
     return parser
 
 

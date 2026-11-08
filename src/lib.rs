@@ -334,11 +334,19 @@ fn submit_node_registry_change(
 //
 // `POST /nodes/register`
 //
-// No request body is required. The endpoint certifies and submits
-// `register_node(ctx.node_id)` for the node hosting this endpoint. It requires
-// an active search oracle, and repeated calls are safe.
+// No request body is required. If the node is already registered, returns `200`
+// immediately without certifying anything. Otherwise the endpoint certifies and
+// submits `register_node(ctx.node_id)` for the node hosting this endpoint and
+// returns `202`. It requires an active search oracle.
 //
-// Response - `202 Accepted`:
+// Response - `200 OK` (already registered):
+// {
+//   "status": "registered",
+//   "method": "register_node",
+//   "node_id": "Node-..."
+// }
+//
+// Response - `202 Accepted` (registration submitted):
 // {
 //   "status": "submitted",
 //   "method": "register_node",
@@ -351,6 +359,20 @@ fn submit_node_registry_change(
 #[method::instance(export = http, method = "POST", path_prefix = "/nodes/register")]
 fn register_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
     let node = ctx.node_id;
+
+    // Cheap idempotency fast path: a restarted MCP or a repeated bootstrap call
+    // should not trigger a committee certification round and a sequenced
+    // transaction when the node is already in the registry.
+    if ctx.network.node_registry.contains(&node) {
+        let body = serde_json::json!({
+            "status": "registered",
+            "method": "register_node",
+            "node_id": node.to_string(),
+        })
+        .to_string();
+        return Ok(http_json_response(200, &body));
+    }
+
     submit_node_registry_change(&mut ctx, "register_node", node)
 }
 

@@ -25,12 +25,22 @@ For example, in pi-agent, use the following:
         "--lyquid-id",
         "<LYQUID_ID>"
       ],
-      "timeout": 30,
+      "timeout": 120,
       "exposure": "direct"
     }
   }
 }
 ```
+
+## MCP Tools
+
+- `list_skill` — lists the local node's skills with name, description, and digest.
+- `search_skills(query, top_k=5)` — searches the network and returns aggregated
+  skills with name, description, and digest. Use the digest with `get_skill`.
+- `get_skill(digest, detail="full", paths=None)` — fetches a skill by digest
+  through `/skills/get`. `detail="description"` returns only the description;
+  `detail="full"` includes instructions and resources. Pass `paths` to expose
+  only selected resource files.
 
 ## Uploading Skills
 

@@ -28,6 +28,76 @@ class SkillSummary:
 
 
 @dataclass(frozen=True)
+class SearchStatus:
+    """The response returned by ``POST /search/status``."""
+
+    query_id: str
+    status: str
+    completed: bool
+    timed_out: bool
+    received_results: int
+    expected_results: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
+        return cls(
+            query_id=str(data.get("query_id", "")),
+            status=str(data.get("status", "")),
+            completed=bool(data.get("completed", False)),
+            timed_out=bool(data.get("timed_out", False)),
+            received_results=_json_int(data.get("received_results")),
+            expected_results=_json_int(data.get("expected_results")),
+        )
+
+
+@dataclass(frozen=True)
+class SearchMatch:
+    """One aggregated skill match returned by ``POST /search/get``."""
+
+    skill_digest: str
+    bm25_score: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
+        digest = data.get("skill_digest")
+        if not isinstance(digest, str) or not digest:
+            raise TypeError("search match is missing a skill_digest")
+        return cls(
+            skill_digest=digest,
+            bm25_score=_json_int(data.get("bm25_score")),
+        )
+
+
+@dataclass(frozen=True)
+class SearchResults:
+    """The response returned by ``POST /search/get``."""
+
+    query_id: str
+    completed: bool
+    timed_out: bool
+    verified_results: int
+    rejected_results: int
+    aggregated: list[SearchMatch]
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        data = _mapping(data)
+        aggregated = data.get("aggregated", [])
+        if not isinstance(aggregated, list):
+            raise TypeError("search results aggregated must be a list")
+        return cls(
+            query_id=str(data.get("query_id", "")),
+            completed=bool(data.get("completed", False)),
+            timed_out=bool(data.get("timed_out", False)),
+            verified_results=_json_int(data.get("verified_results")),
+            rejected_results=_json_int(data.get("rejected_results")),
+            aggregated=[SearchMatch.from_dict(item) for item in aggregated],
+        )
+
+
+@dataclass(frozen=True)
 class UploadSkillResponse:
     """The response returned by ``POST /skills/upload``."""
 
@@ -208,6 +278,118 @@ class NodeManager:
             response.raise_for_status()
         return UploadSkillResponse.from_dict(response.json())
 
+    def start_search(self, query: str, top_k: int = 5) -> str:
+        """Submit a search and return its query ID."""
+
+        if not query.strip():
+            raise ValueError("query must not be empty")
+        if top_k <= 0:
+            raise ValueError("top_k must be greater than zero")
+
+        response = httpx.post(
+            self._url("/search/new"),
+            headers=self._headers(content_type="application/json"),
+            json={"query": query, "k": top_k},
+            timeout=30.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        body = _mapping(response.json())
+        query_id = body.get("query_id")
+        if not isinstance(query_id, str) or not query_id:
+            raise RuntimeError(f"/search/new did not return a query_id: {body!r}")
+        return query_id
+
+    def get_search_status(self, query_id: str) -> SearchStatus:
+        """Return the status of a submitted search."""
+
+        response = httpx.post(
+            self._url("/search/status"),
+            headers=self._headers(content_type="application/json"),
+            json={"query_id": query_id},
+            timeout=10.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        return SearchStatus.from_dict(response.json())
+
+    def get_search_results(self, query_id: str) -> SearchResults:
+        """Return the completed results for a search."""
+
+        response = httpx.post(
+            self._url("/search/get"),
+            headers=self._headers(content_type="application/json"),
+            json={"query_id": query_id},
+            timeout=30.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        return SearchResults.from_dict(response.json())
+
+    def get_skill(self, digest: str) -> Skill:
+        """Fetch a full skill by digest from ``POST /skills/get``."""
+
+        if not digest.strip():
+            raise ValueError("digest must not be empty")
+
+        response = httpx.post(
+            self._url("/skills/get"),
+            headers=self._headers(content_type="application/json"),
+            json={"digest": digest},
+            timeout=30.0,
+        )
+        if response.is_error:
+            response.raise_for_status()
+        return Skill.from_dict(_mapping(response.json()))
+
+    def search_skills(
+        self,
+        query: str,
+        top_k: int = 5,
+        *,
+        timeout: float = 60.0,
+        poll_interval: float = 1.0,
+    ) -> list[SkillSummary]:
+        """Run a search and return its aggregated skills with names and digests."""
+
+        _validate_wait(timeout, poll_interval)
+        query_id = self.start_search(query, top_k)
+        deadline = time.monotonic() + timeout
+        last_error = "query is not registered"
+
+        while time.monotonic() < deadline:
+            try:
+                status = self.get_search_status(query_id)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 404:
+                    raise
+                last_error = f"query {query_id} is not registered"
+            else:
+                if status.completed:
+                    break
+                last_error = (
+                    f"received {status.received_results}/"
+                    f"{status.expected_results} results"
+                )
+            _sleep_until(deadline, poll_interval)
+        else:
+            raise RuntimeError(
+                f"search {query_id} did not complete within {timeout:.0f}s: {last_error}"
+            )
+
+        results = self.get_search_results(query_id)
+        summaries: list[SkillSummary] = []
+        for match in results.aggregated:
+            skill = self.get_skill(match.skill_digest)
+            summaries.append(
+                SkillSummary(
+                    name=skill.name,
+                    description=skill.description,
+                    digest=match.skill_digest,
+                )
+            )
+        return summaries
+
     def get_oracle_status(self) -> OracleStatus:
         """Return the search oracle's activation state."""
 
@@ -379,6 +561,9 @@ __all__ = [
     "NodeRegistrationResponse",
     "OracleStatus",
     "PrepareResult",
+    "SearchMatch",
+    "SearchResults",
+    "SearchStatus",
     "SkillSummary",
     "UploadSkillResponse",
 ]

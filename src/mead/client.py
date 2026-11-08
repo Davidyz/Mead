@@ -6,16 +6,24 @@ from .node_manager import (
     NodeRegistrationResponse,
     OracleStatus,
     PrepareResult,
+    SearchMatch,
+    SearchResults,
+    SearchStatus,
     SkillSummary,
     UploadSkillResponse,
 )
+from .tools import MeadTools
 
 __all__ = [
     "ActivationResponse",
+    "MeadTools",
     "NodeManager",
     "NodeRegistrationResponse",
     "OracleStatus",
     "PrepareResult",
+    "SearchMatch",
+    "SearchResults",
+    "SearchStatus",
     "SkillSummary",
     "UploadSkillResponse",
 ]

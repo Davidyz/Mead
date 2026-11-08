@@ -6,6 +6,7 @@ import httpx
 
 from .node_manager import NodeManager
 from .skills import SkillManager
+from .tools import MeadTools
 from .utils import parse_args
 
 logger = logging.getLogger(name=__name__)
@@ -59,7 +60,7 @@ async def main_coro() -> None:
         )
         sys.exit(0)
 
-    server = skill_manager.make_mcp_server()
+    server = MeadTools(node_manager).make_mcp_server()
     await server.run_stdio_async()
 
 

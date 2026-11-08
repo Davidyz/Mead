@@ -190,17 +190,17 @@ def test_search_and_get_skill_round_trip(devnet: dict[str, Any]) -> None:
             continue
 
         # The raw aggregated result must contain a peer digest; now verify that
-        # the MCP search resolves it instead of dropping it, and that its body
-        # is actually retrievable.
+        # the summary resolution used by search_skills keeps it instead of
+        # dropping it, and that its body is actually retrievable.
         skill = manager.get_skill(peer_digest)
         assert skill.name
         assert skill.description
 
-        summaries = tools.mcp_search_skills(query, top_k=5)
+        summaries = manager.search_skill_summaries(query_id)
         assert any(
-            _normalize_digest(summary["digest"]) == _normalize_digest(peer_digest)
+            _normalize_digest(summary.digest) == _normalize_digest(peer_digest)
             for summary in summaries
-        ), f"MCP search dropped peer digest {peer_digest}"
+        ), f"search summary resolution dropped peer digest {peer_digest}"
 
         skill_md = tools.mcp_get_skill(peer_digest)
         assert f"# {skill.name}" in skill_md

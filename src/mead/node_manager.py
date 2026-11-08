@@ -380,6 +380,11 @@ class NodeManager:
                 f"search {query_id} did not complete within {timeout:.0f}s: {last_error}"
             )
 
+        return self.search_skill_summaries(query_id)
+
+    def search_skill_summaries(self, query_id: str) -> list[SkillSummary]:
+        """Resolve a completed query's aggregated digests into skill summaries."""
+
         results = self.get_search_results(query_id)
         summaries: list[SkillSummary] = []
         unresolved: list[str] = []

@@ -522,31 +522,54 @@ def wait_for_lyquid(node: Node, lyquid_id: str) -> None:
 def activate_search_oracle(node: Node, lyquid_id: str) -> None:
     """Activate the first search-oracle epoch and wait until it is active.
 
-    The endpoint is idempotent and submits any still-needed epoch work on each
-    call, so poll it rather than relying on a background retry.
+    POST once to submit the needed epoch work, then poll GET /oracle/status
+    (read-only). Re-POST with a capped exponential backoff only while the
+    oracle is still inactive, so polling does not re-submit a finalize
+    certificate every second.
     """
     headers = _node_headers(node, lyquid_id)
     base_url = f"http://127.0.0.1:{node.port}"
+    activate_url = f"{base_url}/oracle/activate"
+    status_url = f"{base_url}/oracle/status"
 
     print(f"Activating search oracle via node{node.index}...")
     deadline = time.monotonic() + ORACLE_ACTIVATION_TIMEOUT
+    next_post = time.monotonic()
+    backoff = 1.0
     last_error = "no response"
+
     while time.monotonic() < deadline:
+        now = time.monotonic()
+        if now >= next_post:
+            try:
+                response = httpx.post(activate_url, headers=headers, timeout=30.0)
+            except httpx.HTTPError as error:
+                last_error = str(error)
+            else:
+                if response.status_code == 200:
+                    body = response.json()
+                    if body.get("status") == "active":
+                        print(f"Search oracle active (epoch {body.get('epoch')}).")
+                        return
+                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+            next_post = now + backoff
+            backoff = min(backoff * 2, 8.0)
+
         try:
-            response = httpx.post(
-                f"{base_url}/oracle/activate",
-                headers=headers,
-                timeout=30.0,
-            )
+            status = httpx.get(status_url, headers=headers, timeout=5.0)
         except httpx.HTTPError as error:
             last_error = str(error)
         else:
-            if response.status_code == 200:
-                body = response.json()
-                if body.get("status") == "active":
+            if status.status_code == 200:
+                body = status.json()
+                if body.get("active"):
                     print(f"Search oracle active (epoch {body.get('epoch')}).")
                     return
-            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                last_error = (
+                    f"epoch {body.get('epoch')} source_epoch {body.get('source_epoch')}"
+                )
+            else:
+                last_error = f"HTTP {status.status_code}: {status.text[:200]}"
         time.sleep(1)
 
     raise RuntimeError(

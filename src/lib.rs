@@ -108,15 +108,16 @@ fn oracle_activation_response(
 ///
 /// `finalize_epoch` always builds a certificate while the source config is
 /// valid, so its return value cannot tell us whether finalization is still
-/// pending. Callers should gate on the source config instead (a non-empty
-/// current committee means the source has adopted the epoch).
+/// pending. Callers should gate on the source epoch instead (see
+/// `StateVar::get_epoch`). Submission errors are propagated so the endpoint can
+/// report a failed finalize instead of returning `202` forever.
 fn submit_search_oracle_finalize(
     ctx: &mut crate::__lyquid::InstanceContext,
     target: OracleTarget,
 ) -> LyquidResult<()> {
     let oracle = ctx.network.search.clone();
     if let Some(call) = oracle.finalize_epoch(ctx, target)? {
-        let _ = submit_certified_call!(call);
+        submit_certified_call!(call)?;
     }
     Ok(())
 }
@@ -142,7 +143,7 @@ fn submit_search_oracle_finalize(
 // { "status": "activating", "epoch": 0, "attempt": 0 }
 //
 // Errors:
-// - `502`: submitting the certified epoch advance failed.
+// - `502`: submitting the certified epoch advance or finalize failed.
 // - `503`: the oracle is not staged.
 #[method::instance(export = http, method = "POST", path_prefix = "/oracle/activate")]
 fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
@@ -166,19 +167,21 @@ fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http
     }
 
     if epoch > 0 {
-        // Certification needs the source-side config. A non-empty current
-        // committee means the source has adopted the target epoch; otherwise
-        // submit the finalize certificate and let the caller poll again.
-        let source_active = !ctx
-            .network
-            .search
-            .config_current(&ctx, target)
-            .committee
-            .is_empty();
+        // Certification needs the source-side config at the *same* epoch. A
+        // non-empty committee from an older epoch is not enough if the
+        // destination advanced again.
+        let source_active = ctx.network.search.get_epoch(&ctx, target) == epoch;
         if source_active {
             return Ok(oracle_activation_response(200, "active", epoch, 0));
         }
-        submit_search_oracle_finalize(&mut ctx, target)?;
+        if let Err(error) = submit_search_oracle_finalize(&mut ctx, target) {
+            return Ok(http_json_response(
+                502,
+                &json_error(&format!(
+                    "failed to submit the search oracle epoch finalize: {error}"
+                )),
+            ));
+        }
     }
 
     Ok(oracle_activation_response(202, "activating", epoch, 0))
@@ -188,25 +191,23 @@ fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http
 //
 // `GET /oracle/status`
 //
-// `active` requires both the destination epoch to be non-zero and the source
-// side to have adopted the epoch config; `source_active` reports the latter.
+// `active` is true when the destination epoch is non-zero and the source's
+// finalized epoch matches it. `source_active` reports that match and
+// `source_epoch` reports the source's finalized epoch.
 //
 // Response - `200 OK`:
-// { "active": false, "epoch": 0, "source_active": false }
+// { "active": false, "epoch": 0, "source_active": false, "source_epoch": 0 }
 #[method::instance(export = http, method = "GET", path_prefix = "/oracle/status")]
 fn search_oracle_status(ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
     let target = search_oracle_target(ctx.lyquid_id)?;
     let epoch = search_oracle_epoch(target)?;
-    let source_active = !ctx
-        .network
-        .search
-        .config_current(&ctx, target)
-        .committee
-        .is_empty();
+    let source_epoch = ctx.network.search.get_epoch(&ctx, target);
+    let source_active = epoch > 0 && source_epoch == epoch;
     let body = serde_json::json!({
-        "active": epoch > 0 && source_active,
+        "active": source_active,
         "epoch": epoch,
         "source_active": source_active,
+        "source_epoch": source_epoch,
     })
     .to_string();
     Ok(http_json_response(200, &body))

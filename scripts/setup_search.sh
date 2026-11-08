@@ -44,19 +44,40 @@ first_host="$(
 )"
 first_port="$(jq -r '.nodes[0].port' "$NODES_JSON")"
 activate_url="http://127.0.0.1:${first_port}/oracle/activate"
+status_url="http://127.0.0.1:${first_port}/oracle/status"
 
 echo "Lyquid: $Lyquid"
 echo "Activating search oracle..."
 deadline=$((SECONDS + ACTIVATION_TIMEOUT))
+next_post=$SECONDS
+backoff=1
 active=0
 while (( SECONDS < deadline )); do
-  activate_body="$(
-    curl -sS -X POST -H "Host: ${first_host}" -H 'content-length: 0' \
-      "$activate_url" 2>/dev/null || true
-  )"
-  activate_state="$(jq -r '.status // empty' <<<"${activate_body}" 2>/dev/null || true)"
-  if [[ "$activate_state" == "active" ]]; then
-    echo "  search oracle active (epoch $(jq -r '.epoch' <<<"${activate_body}"))"
+  # Submit the needed epoch work, then poll the read-only status. Re-POST only
+  # with backoff so polling does not submit a finalize certificate every second.
+  if (( SECONDS >= next_post )); then
+    activate_body="$(
+      curl -sS -X POST -H "Host: ${first_host}" -H 'content-length: 0' \
+        "$activate_url" 2>/dev/null || true
+    )"
+    activate_state="$(jq -r '.status // empty' <<<"${activate_body}" 2>/dev/null || true)"
+    if [[ "$activate_state" == "active" ]]; then
+      echo "  search oracle active (epoch $(jq -r '.epoch' <<<"${activate_body}"))"
+      active=1
+      break
+    fi
+    next_post=$((SECONDS + backoff))
+    if (( backoff < 8 )); then
+      backoff=$((backoff * 2))
+    else
+      backoff=8
+    fi
+  fi
+
+  status_body="$(curl -sS -H "Host: ${first_host}" "$status_url" 2>/dev/null || true)"
+  active_now="$(jq -r '.active // false' <<<"${status_body}" 2>/dev/null || true)"
+  if [[ "$active_now" == "true" ]]; then
+    echo "  search oracle active (epoch $(jq -r '.epoch' <<<"${status_body}"))"
     active=1
     break
   fi

@@ -101,6 +101,19 @@ class SearchResults:
 
 
 @dataclass(frozen=True)
+class SearchOutcome:
+    """A completed search with its skill summaries and result metadata."""
+
+    skills: list[SkillSummary]
+    timed_out: bool
+    received_results: int
+    expected_results: int
+    verified_results: int
+    rejected_results: int
+    unresolved_digests: list[str]
+
+
+@dataclass(frozen=True)
 class UploadSkillResponse:
     """The response returned by ``POST /skills/upload``."""
 
@@ -352,13 +365,14 @@ class NodeManager:
         *,
         timeout: float = 60.0,
         poll_interval: float = 1.0,
-    ) -> list[SkillSummary]:
-        """Run a search and return its aggregated skills with names and digests."""
+    ) -> SearchOutcome:
+        """Run a search and return its skills plus partial-result metadata."""
 
         _validate_wait(timeout, poll_interval)
         query_id = self.start_search(query, top_k)
         deadline = time.monotonic() + timeout
         last_error = "query is not registered"
+        status: SearchStatus | None = None
 
         while time.monotonic() < deadline:
             try:
@@ -368,7 +382,7 @@ class NodeManager:
                     raise
                 last_error = f"query {query_id} is not registered"
             else:
-                if status.completed:
+                if status.completed or status.timed_out:
                     break
                 last_error = (
                     f"received {status.received_results}/"
@@ -380,12 +394,33 @@ class NodeManager:
                 f"search {query_id} did not complete within {timeout:.0f}s: {last_error}"
             )
 
-        return self.search_skill_summaries(query_id)
+        if status is None:
+            raise RuntimeError(f"search {query_id} did not report a status")
+
+        results = self.get_search_results(query_id)
+        summaries, unresolved = self._resolve_search_results(results)
+        self._log_unresolved(query_id, unresolved)
+        return SearchOutcome(
+            skills=summaries,
+            timed_out=status.timed_out or results.timed_out,
+            received_results=status.received_results,
+            expected_results=status.expected_results,
+            verified_results=results.verified_results,
+            rejected_results=results.rejected_results,
+            unresolved_digests=unresolved,
+        )
 
     def search_skill_summaries(self, query_id: str) -> list[SkillSummary]:
         """Resolve a completed query's aggregated digests into skill summaries."""
 
         results = self.get_search_results(query_id)
+        summaries, unresolved = self._resolve_search_results(results)
+        self._log_unresolved(query_id, unresolved)
+        return summaries
+
+    def _resolve_search_results(
+        self, results: SearchResults
+    ) -> tuple[list[SkillSummary], list[str]]:
         summaries: list[SkillSummary] = []
         unresolved: list[str] = []
         for match in results.aggregated:
@@ -403,6 +438,10 @@ class NodeManager:
                     digest=match.skill_digest,
                 )
             )
+        return summaries, unresolved
+
+    @staticmethod
+    def _log_unresolved(query_id: str, unresolved: list[str]) -> None:
         if unresolved:
             logger.warning(
                 "search %s: %d aggregated skill body(s) were unavailable: %s",
@@ -410,7 +449,6 @@ class NodeManager:
                 len(unresolved),
                 ", ".join(unresolved),
             )
-        return summaries
 
     def get_oracle_status(self) -> OracleStatus:
         """Return the search oracle's activation state."""
@@ -584,6 +622,7 @@ __all__ = [
     "OracleStatus",
     "PrepareResult",
     "SearchMatch",
+    "SearchOutcome",
     "SearchResults",
     "SearchStatus",
     "SkillSummary",

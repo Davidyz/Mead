@@ -1,7 +1,7 @@
 """MCP tools backed by the Mead Lyquid HTTP API."""
 
 from collections.abc import Iterable
-from typing import Literal
+from typing import Any, Literal
 
 lazy from mcp.server import MCPServer
 
@@ -66,20 +66,29 @@ class MeadTools:
             )
         ]
 
-    def mcp_search_skills(self, query: str, top_k: int = 5) -> list[dict[str, str]]:
+    def mcp_search_skills(self, query: str, top_k: int = 5) -> dict[str, Any]:
         """Search the network for skills using a lexical BM25 query.
 
         Matching is exact-token based: the query and each skill are lowercased,
         split into words, and English stop words are removed. There is no
         stemming or synonym expansion, so include synonyms, related terms, and
         alternative word forms (for example, "image photo picture create
-        generate draw") to improve recall. Returns name, description, and digest
-        for each aggregated match.
+        generate draw") to improve recall.
+
+        Returns ``skills`` (name, description, digest), ``timed_out``, the
+        received/expected and verified/rejected result counts, and any
+        ``unresolved_digests`` whose bodies were unavailable.
         """
-        return [
-            _summary_payload(summary)
-            for summary in self._node_manager.search_skills(query, top_k=top_k)
-        ]
+        outcome = self._node_manager.search_skills(query, top_k=top_k)
+        return {
+            "skills": [_summary_payload(summary) for summary in outcome.skills],
+            "timed_out": outcome.timed_out,
+            "received_results": outcome.received_results,
+            "expected_results": outcome.expected_results,
+            "verified_results": outcome.verified_results,
+            "rejected_results": outcome.rejected_results,
+            "unresolved_digests": outcome.unresolved_digests,
+        }
 
     def mcp_get_skill(
         self,

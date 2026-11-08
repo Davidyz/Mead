@@ -35,10 +35,11 @@ For example, in pi-agent, use the following:
 ## MCP Tools
 
 - `list_skill` — lists the local node's skills with name, description, and digest.
-- `search_skills(query, top_k=5)` — searches the network and returns aggregated
-  skills with name, description, and digest. Use the digest with `get_skill`.
-  Matching is lexical BM25 with no stemming or synonyms, so include related
-  words and alternative word forms in the query to improve recall.
+- `search_skills(query, top_k=5)` — searches the network and returns an object
+  with `skills` (name, description, digest), `timed_out`, received/expected and
+  verified/rejected counts, and any `unresolved_digests`. Use the digest with
+  `get_skill`. Matching is lexical BM25 with no stemming or synonyms, so
+  include related words and alternative word forms in the query.
 - `get_skill(digest, detail="skill_md", paths=None)` — fetches a skill by
   digest through `/skills/get`. `detail="skill_md"` returns the SKILL.md
   content and lists available resource paths; `detail="full"` also includes

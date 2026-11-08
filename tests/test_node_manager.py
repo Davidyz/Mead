@@ -371,9 +371,15 @@ def test_search_skills_polls_status_and_maps_matches(
     )
     monkeypatch.setattr(manager, "get_skill", lambda digest: skill)
 
-    summaries = manager.search_skills("demo", top_k=3, timeout=1.0, poll_interval=0.01)
+    outcome = manager.search_skills("demo", top_k=3, timeout=1.0, poll_interval=0.01)
 
-    assert summaries == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.timed_out is False
+    assert outcome.received_results == 3
+    assert outcome.expected_results == 3
+    assert outcome.verified_results == 3
+    assert outcome.rejected_results == 0
+    assert outcome.unresolved_digests == []
 
 
 def test_search_skills_skips_unresolved_skill_bodies(
@@ -415,10 +421,37 @@ def test_search_skills_skips_unresolved_skill_bodies(
     monkeypatch.setattr(manager, "get_skill", get_skill)
     caplog.set_level(logging.WARNING)
 
-    summaries = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
+    outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
 
-    assert summaries == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.unresolved_digests == ["0xmissing"]
     assert "0xmissing" in caplog.text
+
+
+def test_search_skills_surfaces_timed_out_results(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = _offline_manager(tmp_path)
+    monkeypatch.setattr(manager, "start_search", lambda query, top_k: "qid")
+    monkeypatch.setattr(
+        manager,
+        "get_search_status",
+        lambda query_id: SearchStatus("qid", "completed", True, True, 1, 3),
+    )
+    monkeypatch.setattr(
+        manager,
+        "get_search_results",
+        lambda query_id: SearchResults("qid", True, True, 1, 0, []),
+    )
+
+    outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
+
+    assert outcome.skills == []
+    assert outcome.timed_out is True
+    assert outcome.received_results == 1
+    assert outcome.expected_results == 3
+    assert outcome.verified_results == 1
+    assert outcome.rejected_results == 0
 
 
 def test_search_skills_retries_until_the_query_registers(
@@ -444,7 +477,9 @@ def test_search_skills_retries_until_the_query_registers(
         lambda query_id: SearchResults("qid", True, False, 0, 0, []),
     )
 
-    assert manager.search_skills("demo", timeout=1.0, poll_interval=0.01) == []
+    outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
+
+    assert outcome.skills == []
     assert calls["status"] == 2
 
 

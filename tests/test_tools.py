@@ -6,7 +6,7 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from mead.node_manager import NodeManager, SkillSummary
+from mead.node_manager import NodeManager, SearchOutcome, SkillSummary
 from mead.skills import Skill
 from mead.tools import MeadTools
 from mead.utils import CLIArgs
@@ -16,18 +16,35 @@ NODES_JSON = FIXTURE_DIR / "nodes.json"
 
 
 class FakeNodeManager:
-    def __init__(self, summaries: list[SkillSummary], skills: dict[str, Skill]):
+    def __init__(
+        self,
+        summaries: list[SkillSummary],
+        skills: dict[str, Skill],
+        *,
+        timed_out: bool = False,
+        unresolved_digests: list[str] | None = None,
+    ):
         self.summaries = summaries
         self.skills = skills
+        self.timed_out = timed_out
+        self.unresolved_digests = unresolved_digests or []
         self.search_calls: list[tuple[str, int]] = []
         self.get_calls: list[str] = []
 
     def list_skills(self) -> list[SkillSummary]:
         return list(self.summaries)
 
-    def search_skills(self, query: str, top_k: int = 5) -> list[SkillSummary]:
+    def search_skills(self, query: str, top_k: int = 5) -> SearchOutcome:
         self.search_calls.append((query, top_k))
-        return list(self.summaries)
+        return SearchOutcome(
+            skills=list(self.summaries),
+            timed_out=self.timed_out,
+            received_results=len(self.summaries),
+            expected_results=len(self.summaries),
+            verified_results=len(self.summaries),
+            rejected_results=0,
+            unresolved_digests=list(self.unresolved_digests),
+        )
 
     def get_skill(self, digest: str) -> Skill:
         self.get_calls.append(digest)
@@ -52,10 +69,38 @@ def test_mcp_search_skills_passes_query_and_top_k() -> None:
     fake = FakeNodeManager(summaries, {})
     tools = MeadTools(cast(NodeManager, fake))
 
-    assert tools.mcp_search_skills("demo query", top_k=3) == [
-        {"name": "demo", "description": "A demo skill", "digest": "digest-demo"}
-    ]
+    assert tools.mcp_search_skills("demo query", top_k=3) == {
+        "skills": [
+            {"name": "demo", "description": "A demo skill", "digest": "digest-demo"}
+        ],
+        "timed_out": False,
+        "received_results": 1,
+        "expected_results": 1,
+        "verified_results": 1,
+        "rejected_results": 0,
+        "unresolved_digests": [],
+    }
     assert fake.search_calls == [("demo query", 3)]
+
+
+def test_mcp_search_skills_surfaces_partial_result_metadata() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo")
+    fake = FakeNodeManager(
+        [summary], {}, timed_out=True, unresolved_digests=["digest-missing"]
+    )
+    tools = MeadTools(cast(NodeManager, fake))
+
+    assert tools.mcp_search_skills("demo query") == {
+        "skills": [
+            {"name": "demo", "description": "A demo skill", "digest": "digest-demo"}
+        ],
+        "timed_out": True,
+        "received_results": 1,
+        "expected_results": 1,
+        "verified_results": 1,
+        "rejected_results": 0,
+        "unresolved_digests": ["digest-missing"],
+    }
 
 
 def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:

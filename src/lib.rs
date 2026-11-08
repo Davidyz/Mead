@@ -89,16 +89,10 @@ fn search_oracle_epoch(target: OracleTarget) -> LyquidResult<u32> {
     )
 }
 
-fn oracle_activation_response(
-    status: u16,
-    state: &str,
-    epoch: u32,
-    attempt: u32,
-) -> http::Response {
+fn oracle_activation_response(status: u16, state: &str, epoch: u32) -> http::Response {
     let body = serde_json::json!({
         "status": state,
         "epoch": epoch,
-        "attempt": attempt,
     })
     .to_string();
     http_json_response(status, &body)
@@ -137,10 +131,10 @@ fn submit_search_oracle_finalize(
 //
 // Response - `200 OK` (already active or fully active by the time the call
 // returned):
-// { "status": "active", "epoch": 1, "attempt": 0 }
+// { "status": "active", "epoch": 1 }
 //
 // Response - `202 Accepted` (activation in progress; retry):
-// { "status": "activating", "epoch": 0, "attempt": 0 }
+// { "status": "activating", "epoch": 0 }
 //
 // Errors:
 // - `502`: submitting the certified epoch advance or finalize failed.
@@ -153,7 +147,7 @@ fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http
     let mut epoch = search_oracle_epoch(target)?;
     if epoch == 0 {
         let Some(call) = oracle.advance_epoch(&mut ctx, target)? else {
-            return Ok(oracle_activation_response(503, "not_staged", 0, 0));
+            return Ok(oracle_activation_response(503, "not_staged", 0));
         };
         if let Err(error) = submit_certified_call!(call) {
             return Ok(http_json_response(
@@ -172,7 +166,7 @@ fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http
         // destination advanced again.
         let source_active = ctx.network.search.get_epoch(&ctx, target) == epoch;
         if source_active {
-            return Ok(oracle_activation_response(200, "active", epoch, 0));
+            return Ok(oracle_activation_response(200, "active", epoch));
         }
         if let Err(error) = submit_search_oracle_finalize(&mut ctx, target) {
             return Ok(http_json_response(
@@ -184,7 +178,7 @@ fn activate_search_oracle(ctx: &mut _, _req: http::Request) -> LyquidResult<http
         }
     }
 
-    Ok(oracle_activation_response(202, "activating", epoch, 0))
+    Ok(oracle_activation_response(202, "activating", epoch))
 }
 
 // Reports whether the search oracle is active.

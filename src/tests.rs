@@ -170,13 +170,13 @@ fn rejects_missing_and_malformed_query_ids() {
 
 #[lyquid_test::test]
 fn oracle_activation_response_reports_state() {
-    let response = oracle_activation_response(202, "activating", 0, 3);
+    let response = oracle_activation_response(202, "activating", 0);
     let body = response_json(&response);
 
     assert_eq!(response.status, 202);
     assert_eq!(body["status"].as_str(), Some("activating"));
     assert_eq!(body["epoch"].as_u64(), Some(0));
-    assert_eq!(body["attempt"].as_u64(), Some(3));
+    assert!(body.get("attempt").is_none());
 }
 
 #[lyquid_test::test]

@@ -321,7 +321,9 @@ def fund_nodes(
     try:
         funder_config = configs[1]["submitter"]["inline"]  # type: ignore[index]
     except (KeyError, TypeError) as error:
-        raise RuntimeError(f"could not read the node1 submitter key: {error}") from error
+        raise RuntimeError(
+            f"could not read the node1 submitter key: {error}"
+        ) from error
     if not isinstance(funder_config, str):
         raise TypeError("node1 submitter.inline must be a string private key")
 
@@ -334,7 +336,7 @@ def fund_nodes(
         config = configs[node.index]
         try:
             private_key = config["submitter"]["inline"]  # type: ignore[index]
-        except (KeyError, TypeError):
+        except KeyError, TypeError:
             print(f"node{node.index}: no submitter.inline private key; skipping")
             continue
         if not isinstance(private_key, str):

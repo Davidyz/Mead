@@ -15,11 +15,10 @@ This performs the full local devnet preparation:
    each node directory.
 4. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
    ports, and selected fixture skill names for integration tests.
-5. Upload each node's fixture directory with ``uv run mead --upload-only``.
-6. Activate the constructor-staged search oracle through ``POST /oracle/activate``
-   and wait for ``GET /oracle/status`` to report it active.
-7. Self-register every node through ``POST /nodes/register`` and wait for the
-   shared ``NodeRegistry`` to contain all of them.
+5. Prepare every node with ``uv run mead --prepare-only``: upload the fixture
+   directory, activate the constructor-staged search oracle on the first node,
+   self-register the node, and wait until the shared ``NodeRegistry`` contains
+   it.
 
 Running this script is the full devnet bootstrap; no separate setup-search step
 is required.
@@ -79,8 +78,8 @@ DEFAULT_ORACLE_THRESHOLD = 2
 NODE_ID_BYTES = 32
 DEFAULT_DEVNET_DIR = Path.home() / ".shakenup" / "ldk" / "docker" / "multi"
 DEFAULT_NODE_FUNDING_ETH = "10"
-ORACLE_ACTIVATION_TIMEOUT = 120.0
-NODE_REGISTRATION_TIMEOUT = 60.0
+PREPARE_TIMEOUT = 120.0
+PREPARE_POLL_INTERVAL = 1.0
 
 
 @dataclass(frozen=True)
@@ -468,25 +467,39 @@ def write_nodes_json(
     return path
 
 
-def upload_skills(node: Node, fixture_dir: Path, lyquid_id: str) -> None:
+def prepare_node(
+    node: Node, fixture_dir: Path, lyquid_id: str, *, activate: bool
+) -> None:
+    """Upload a node's skills and make it ready to serve searches.
+
+    ``mead --prepare-only`` performs the whole per-node handshake: upload the
+    fixture skills, wait for the search oracle, self-register the node, and wait
+    for ``NodeRegistry`` to contain it. Only the first (committee) node drives
+    oracle activation; the rest wait for it to become active.
+    """
     wait_for_lyquid(node, lyquid_id)
-    print(f"Uploading {fixture_dir.relative_to(ROOT)} to node{node.index}...")
-    run(
-        [
-            "uv",
-            "run",
-            "mead",
-            "--upload-only",
-            "--server-url",
-            f"http://127.0.0.1:{node.port}",
-            "--skill-dir",
-            str(fixture_dir),
-            "--node-id",
-            node.node_id,
-            "--lyquid-id",
-            lyquid_id,
-        ]
-    )
+    print(f"Preparing node{node.index} with {fixture_dir.relative_to(ROOT)}...")
+    command = [
+        "uv",
+        "run",
+        "mead",
+        "--prepare-only",
+        "--server-url",
+        f"http://127.0.0.1:{node.port}",
+        "--skill-dir",
+        str(fixture_dir),
+        "--node-id",
+        node.node_id,
+        "--lyquid-id",
+        lyquid_id,
+        "--wait-timeout",
+        str(PREPARE_TIMEOUT),
+        "--poll-interval",
+        str(PREPARE_POLL_INTERVAL),
+    ]
+    if activate:
+        command.append("--activate-oracle")
+    run(command)
 
 
 def _node_headers(node: Node, lyquid_id: str) -> dict[str, str]:
@@ -519,142 +532,6 @@ def wait_for_lyquid(node: Node, lyquid_id: str) -> None:
     raise RuntimeError(
         f"Lyquid {lyquid_id} did not become ready on node{node.index}: {last_error}"
     )
-
-
-def activate_search_oracle(node: Node, lyquid_id: str) -> None:
-    """Activate the first search-oracle epoch and wait until it is active.
-
-    POST once to submit the needed epoch work, then poll GET /oracle/status
-    (read-only). Re-POST with a capped exponential backoff only while the
-    oracle is still inactive, so polling does not re-submit a finalize
-    certificate every second.
-    """
-    headers = _node_headers(node, lyquid_id)
-    base_url = f"http://127.0.0.1:{node.port}"
-    activate_url = f"{base_url}/oracle/activate"
-    status_url = f"{base_url}/oracle/status"
-
-    print(f"Activating search oracle via node{node.index}...")
-    deadline = time.monotonic() + ORACLE_ACTIVATION_TIMEOUT
-    next_post = time.monotonic()
-    backoff = 1.0
-    last_error = "no response"
-
-    while time.monotonic() < deadline:
-        now = time.monotonic()
-        if now >= next_post:
-            try:
-                response = httpx.post(activate_url, headers=headers, timeout=30.0)
-            except httpx.HTTPError as error:
-                last_error = str(error)
-            else:
-                if response.status_code == 200:
-                    body = response.json()
-                    if body.get("status") == "active":
-                        print(f"Search oracle active (epoch {body.get('epoch')}).")
-                        return
-                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
-            next_post = now + backoff
-            backoff = min(backoff * 2, 8.0)
-
-        try:
-            status = httpx.get(status_url, headers=headers, timeout=5.0)
-        except httpx.HTTPError as error:
-            last_error = str(error)
-        else:
-            if status.status_code == 200:
-                body = status.json()
-                if body.get("active"):
-                    print(f"Search oracle active (epoch {body.get('epoch')}).")
-                    return
-                last_error = (
-                    f"epoch {body.get('epoch')} source_epoch {body.get('source_epoch')}"
-                )
-            else:
-                last_error = f"HTTP {status.status_code}: {status.text[:200]}"
-        time.sleep(1)
-
-    raise RuntimeError(
-        "search oracle did not become active within "
-        f"{ORACLE_ACTIVATION_TIMEOUT:.0f}s: {last_error}"
-    )
-
-
-def register_node(node: Node, lyquid_id: str) -> None:
-    """Submit this node's certified self-registration.
-
-    The endpoint returns 200 when the node is already in the registry and 202
-    when a certified registration call was just submitted. Retry while the
-    oracle is still becoming active (503).
-    """
-    headers = _node_headers(node, lyquid_id)
-    url = f"http://127.0.0.1:{node.port}/nodes/register"
-
-    deadline = time.monotonic() + NODE_REGISTRATION_TIMEOUT
-    last_error = "no response"
-    while time.monotonic() < deadline:
-        try:
-            response = httpx.post(url, headers=headers, timeout=60.0)
-        except httpx.HTTPError as error:
-            last_error = str(error)
-        else:
-            if response.status_code in (200, 202):
-                print(
-                    f"node{node.index} ({node.node_id}): "
-                    f"registered (HTTP {response.status_code})"
-                )
-                return
-            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
-        time.sleep(1)
-
-    raise RuntimeError(
-        f"node{node.index} ({node.node_id}) failed to register within "
-        f"{NODE_REGISTRATION_TIMEOUT:.0f}s: {last_error}"
-    )
-
-
-def wait_for_node_registry(nodes: list[Node], lyquid_id: str) -> None:
-    """Wait until the shared NodeRegistry contains every prepared node."""
-    probe = nodes[0]
-    headers = _node_headers(probe, lyquid_id)
-    url = f"http://127.0.0.1:{probe.port}/nodes/list"
-    expected = sorted(node.node_id for node in nodes)
-
-    deadline = time.monotonic() + NODE_REGISTRATION_TIMEOUT
-    last_error = "no response"
-    while time.monotonic() < deadline:
-        try:
-            response = httpx.get(url, headers=headers, timeout=5.0)
-        except httpx.HTTPError as error:
-            last_error = str(error)
-        else:
-            if response.status_code == 200:
-                try:
-                    actual = sorted(response.json().get("nodes", []))
-                except ValueError:
-                    last_error = "invalid /nodes/list response"
-                else:
-                    if actual == expected:
-                        print(
-                            f"NodeRegistry contains all {len(expected)} "
-                            "registered nodes."
-                        )
-                        return
-                    last_error = f"registered {len(actual)}/{len(expected)}"
-            else:
-                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
-        time.sleep(1)
-
-    raise RuntimeError(
-        "NodeRegistry did not contain all nodes within "
-        f"{NODE_REGISTRATION_TIMEOUT:.0f}s: {last_error}"
-    )
-
-
-def register_nodes(nodes: list[Node], lyquid_id: str) -> None:
-    for node in nodes:
-        register_node(node, lyquid_id)
-    wait_for_node_registry(nodes, lyquid_id)
 
 
 def list_deployed_skills(node: Node, lyquid_id: str) -> list[SkillSummary]:
@@ -760,11 +637,14 @@ def main() -> None:
     fixture_dirs = prepare_fixture(assignments)
     write_nodes_json(nodes, lyquid_id, assignments)
 
+    # Host every Lyquid before activation: the activation UPC is certified by
+    # the whole committee, so the other nodes must already be serving.
     for node in nodes:
-        upload_skills(node, fixture_dirs[node.index], lyquid_id)
+        wait_for_lyquid(node, lyquid_id)
 
-    activate_search_oracle(nodes[0], lyquid_id)
-    register_nodes(nodes, lyquid_id)
+    prepare_node(nodes[0], fixture_dirs[nodes[0].index], lyquid_id, activate=True)
+    for node in nodes[1:]:
+        prepare_node(node, fixture_dirs[node.index], lyquid_id, activate=False)
 
     deployed_skills = collect_deployed_skills(nodes, lyquid_id)
     print_deployed_skills(nodes, deployed_skills)

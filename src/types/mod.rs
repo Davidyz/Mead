@@ -9,7 +9,9 @@ pub use query::{
     MAX_RESULTS_PER_PEER, QueryParams, QueryRegistry, ResultsPerPeer,
     SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery, compute_query_id,
 };
-pub use results::{Bm25Score, MAX_MATCHES, ResultRegistry, SearchResult, SkillMatch};
+pub use results::{
+    Bm25Score, MAX_MATCHES, MAX_RESULTS_PER_QUERY, ResultRegistry, SearchResult, SkillMatch,
+};
 
 use lyquid::prelude::{LyquidError, NodeID};
 

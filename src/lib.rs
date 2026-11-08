@@ -258,6 +258,12 @@ fn record_search_result(
     let query_id = result.query_id;
     let sender = result.sender;
 
+    if !query_registry.is_expected_responder(&query_id, sender) {
+        return Err(invalid_input(
+            "result sender is not an expected responder for this query",
+        ));
+    }
+
     result_registry.insert(&query, result)?;
     query_registry.mark_responder(query_id, sender)?;
 

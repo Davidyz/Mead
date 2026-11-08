@@ -123,6 +123,16 @@ impl QueryRegistry {
             .map(|nodes| nodes.as_slice())
     }
 
+    /// Returns true if `node` is one of the peers expected to answer this query.
+    ///
+    /// Results from nodes outside this set are rejected so an unassigned node
+    /// cannot pad the result registry or influence the aggregated response.
+    pub fn is_expected_responder(&self, query_id: &Hash, node: NodeID) -> bool {
+        self.expected_nodes
+            .get(query_id)
+            .is_some_and(|nodes| nodes.contains(&node))
+    }
+
     /// Returns the node that initiated this query, if it was resolvable.
     pub fn initiator_node(&self, query_id: &Hash) -> Option<NodeID> {
         self.initiator_index.get(query_id).copied()
@@ -500,6 +510,26 @@ mod tests {
 
         registry.mark_responder(query_id, peer).unwrap();
         assert_eq!(registry.responder_count(&query_id), 1);
+    }
+
+    #[lyquid_test::test]
+    fn only_planned_peers_are_expected_responders() {
+        let (mut registry, query_id, initiator, peer) = registered_query();
+        let expected_node = NodeID::new([3u8; 32]);
+
+        assert!(!registry.is_expected_responder(&query_id, expected_node));
+
+        registry
+            .plan(
+                query_id,
+                initiator,
+                vec![expected_node],
+                ChainPos::new(100, 0),
+            )
+            .unwrap();
+
+        assert!(registry.is_expected_responder(&query_id, expected_node));
+        assert!(!registry.is_expected_responder(&query_id, peer));
     }
 
     #[lyquid_test::test]

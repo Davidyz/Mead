@@ -10,12 +10,21 @@ use lyquid::prelude::*;
 
 use crate::types::invalid_input;
 use crate::types::merkle::{Hash, MerkleTree, deserialize_hash, serialize_hash};
+use crate::types::nodes::MAX_REGISTERED_NODES;
 use crate::types::query::{MAX_RESULTS_PER_PEER, SearchQuery};
 
 const MATCH_LEAF_DOMAIN: &[u8] = b"mead/skill-match/v1";
 
 /// Maximum number of matches accepted in a single result.
 pub const MAX_MATCHES: usize = MAX_RESULTS_PER_PEER as usize;
+
+/// Maximum number of results retained for a single query.
+///
+/// A query is only answered by the registered nodes snapshotted at registration
+/// time, so the responder check in `record_search_result` already bounds this.
+/// The explicit cap keeps the registry bounded even if that check is ever
+/// bypassed, and prevents unbounded consensus-state growth from result spam.
+pub const MAX_RESULTS_PER_QUERY: usize = MAX_REGISTERED_NODES;
 
 /// Canonical integer representation of a BM25 score.
 ///
@@ -51,6 +60,11 @@ impl ResultRegistry {
         if self.results.contains_key(&key) {
             return Err(invalid_input(
                 "a result for this query has already been submitted by this peer",
+            ));
+        }
+        if self.count_for_query(&result.query_id) >= MAX_RESULTS_PER_QUERY {
+            return Err(invalid_input(
+                "the query already has the maximum number of results",
             ));
         }
 
@@ -394,5 +408,25 @@ mod tests {
         let result = SearchResult::new(query.query_id, vec![skill(1, 0)], 1, node(9)).unwrap();
 
         assert!(result.validate_against(&query).is_ok());
+    }
+
+    #[lyquid_test::test]
+    fn caps_the_number_of_results_per_query() {
+        let query = query_with_k(10);
+        let mut registry = ResultRegistry::default();
+
+        for byte in 0..MAX_RESULTS_PER_QUERY as u8 {
+            let result =
+                SearchResult::new(query.query_id, vec![skill(byte, 1)], 1, node(byte)).unwrap();
+            registry.insert(&query, result).unwrap();
+        }
+        assert_eq!(
+            registry.count_for_query(&query.query_id),
+            MAX_RESULTS_PER_QUERY
+        );
+
+        let overflow =
+            SearchResult::new(query.query_id, vec![skill(200, 1)], 1, node(200)).unwrap();
+        assert!(registry.insert(&query, overflow).is_err());
     }
 }

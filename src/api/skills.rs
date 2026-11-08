@@ -68,16 +68,22 @@ pub(crate) fn handle_skill_get(
         Err(message) => return Ok(http_json_response(400, &json_error(&message))),
     };
 
-    ensure_skills_loaded(ctx)?;
+    if let Some(skill) = AcquiredSkills::shared().get(&digest) {
+        return skill_json_response(&skill);
+    }
 
-    let acquired = AcquiredSkills::shared().get(&digest);
-    let local = SkillManager::shared()
+    ensure_skills_loaded(ctx)?;
+    let Some(skill) = SkillManager::shared()
         .ok()
-        .and_then(|manager| manager.get(&digest));
-    let Some(skill) = acquired.or(local) else {
+        .and_then(|manager| manager.get(&digest))
+    else {
         return Ok(http_json_response(404, &json_error("skill not found")));
     };
 
+    skill_json_response(&skill)
+}
+
+fn skill_json_response(skill: &Skill) -> LyquidResult<http::Response> {
     match skill.to_json() {
         Ok(body) => Ok(http_json_response(200, &body)),
         Err(error) => Ok(http_json_response(500, &json_error(&error.to_string()))),

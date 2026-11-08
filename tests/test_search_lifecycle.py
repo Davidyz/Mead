@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import importlib.util
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import httpx
 import pytest
@@ -45,6 +47,42 @@ def _devnet_reachable(lifecycle: ModuleType) -> bool:
     except httpx.HTTPError, RuntimeError:
         return False
     return status == 200
+
+
+def test_oracle_activation_is_idempotent_and_concurrent() -> None:
+    lifecycle = _load_lifecycle()
+    if not _devnet_reachable(lifecycle):
+        pytest.skip("devnet is not reachable")
+
+    _, nodes = lifecycle.load_nodes(NODES_JSON)  # type: ignore[attr-defined]
+    node = nodes[0]
+    headers = {"Host": node.host}
+    activate_url = f"{node.base_url}/oracle/activate"
+    status_url = f"{node.base_url}/oracle/status"
+
+    def activate() -> tuple[int, dict[str, Any]]:
+        response = httpx.post(activate_url, headers=headers, timeout=30.0)
+        return response.status_code, response.json()
+
+    # The devnet is already active from make prepare-nodes, so re-activation
+    # must be a no-op that returns the active state immediately.
+    for _ in range(2):
+        status, body = activate()
+        assert status == 200
+        assert body["status"] == "active"
+
+    # Concurrent calls once active are also no-ops.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: activate(), range(4)))
+    assert all(status == 200 for status, _ in results)
+    assert all(body["status"] == "active" for _, body in results)
+
+    status_response = httpx.get(status_url, headers=headers, timeout=5.0)
+    assert status_response.status_code == 200
+    status_body = status_response.json()
+    assert status_body["active"] is True
+    assert status_body["source_active"] is True
+    assert status_body["source_epoch"] == status_body["epoch"]
 
 
 def test_search_lifecycle_completes() -> None:

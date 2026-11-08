@@ -978,6 +978,10 @@ fn get_skill_count(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Respo
 // }
 // ```
 //
+// `202` means the certified `coordinate_search` call was submitted, not that the
+// query is registered yet. Poll `POST /search/status` until it returns `200`
+// before expecting peers to answer.
+//
 // Errors:
 // - `400`: missing/invalid JSON, empty query, or invalid `k`.
 // - `500`: certification failed unexpectedly.

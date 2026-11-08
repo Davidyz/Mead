@@ -11,6 +11,10 @@ use lyquid::prelude::{Hash, HashMap, new_hashmap};
 
 use super::Skill;
 
+// TODO: bound this cache. There is no direct fetch-by-digest path to another
+// node yet, so evicting an entry would make a skill whose digest the caller
+// still holds unavailable until another search returns it. Revisit once direct
+// skill retrieval exists.
 static ACQUIRED: OnceLock<AcquiredSkills> = OnceLock::new();
 
 /// Digest-indexed cache of verified skill bodies learned from peer replies.

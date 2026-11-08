@@ -250,7 +250,7 @@ class NodeManager:
         _validate_wait(timeout, poll_interval)
         deadline = time.monotonic() + timeout
         next_post = time.monotonic()
-        backoff = 1.0
+        backoff = 2.0
         last_error = "no response"
 
         while time.monotonic() < deadline:
@@ -281,7 +281,7 @@ class NodeManager:
                 except httpx.HTTPError as error:
                     last_error = str(error)
                 next_post = time.monotonic() + backoff
-                backoff = min(backoff * 2, 8.0)
+                backoff = min(backoff * 2, 30.0)
 
             _sleep_until(deadline, poll_interval)
 
@@ -298,30 +298,35 @@ class NodeManager:
 
         deadline = time.monotonic() + timeout
         next_post = time.monotonic()
-        backoff = 1.0
+        backoff = 2.0
         last_error = "no response"
 
         while time.monotonic() < deadline:
+            # Poll the registry first: once the submitted registration lands,
+            # there is no need to submit another certificate.
+            try:
+                nodes = self.list_nodes()
+            except httpx.HTTPError as error:
+                last_error = str(error)
+            else:
+                if self._node_id in nodes:
+                    return nodes
+                last_error = (
+                    f"node {self._node_id} is not in the {len(nodes)} registered nodes"
+                )
+
             if time.monotonic() >= next_post:
                 try:
                     response = self.register_node()
                 except httpx.HTTPError as error:
                     last_error = str(error)
                 else:
-                    if response.status in ("registered", "submitted"):
-                        try:
-                            nodes = self.list_nodes()
-                        except httpx.HTTPError as error:
-                            last_error = str(error)
-                        else:
-                            if self._node_id in nodes:
-                                return nodes
-                            last_error = (
-                                f"node {self._node_id} is not in the "
-                                f"{len(nodes)} registered nodes"
-                            )
+                    if response.status not in ("registered", "submitted"):
+                        last_error = (
+                            f"unexpected registration status: {response.status}"
+                        )
                 next_post = time.monotonic() + backoff
-                backoff = min(backoff * 2, 8.0)
+                backoff = min(backoff * 2, 30.0)
 
             _sleep_until(deadline, poll_interval)
 

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from mead.node_manager import (
+    ActivationResponse,
     NodeManager,
     NodeRegistrationResponse,
     OracleStatus,
@@ -207,3 +208,70 @@ def test_validate_wait_rejects_non_positive_values(
 ) -> None:
     with pytest.raises(ValueError):
         _validate_wait(timeout, poll_interval)
+
+
+def test_ensure_registered_polls_before_reposting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    canonical = "Node-ve3tav5jw5ico7or34gcb6ni7rtmd35uokriuijygabd3tsltd7fj6ia"
+    manager = NodeManager(
+        CLIArgs(
+            server_url="http://127.0.0.1:1",
+            skill_dir=tmp_path,
+            node_id=canonical,
+            lyquid_id="Lyquid-example",
+        )
+    )
+    calls = {"register": 0, "list": 0}
+
+    def list_nodes() -> list[str]:
+        calls["list"] += 1
+        return [] if calls["list"] < 3 else [canonical]
+
+    def register_node() -> NodeRegistrationResponse:
+        calls["register"] += 1
+        return NodeRegistrationResponse(status="submitted")
+
+    monkeypatch.setattr(manager, "list_nodes", list_nodes)
+    monkeypatch.setattr(manager, "register_node", register_node)
+
+    nodes = manager.ensure_registered(timeout=1.0, poll_interval=0.01)
+
+    assert canonical in nodes
+    assert calls["register"] == 1
+
+
+def test_ensure_oracle_active_polls_before_reposting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manager = NodeManager(
+        CLIArgs(
+            server_url="http://127.0.0.1:1",
+            skill_dir=tmp_path,
+            node_id="Node-example",
+            lyquid_id="Lyquid-example",
+        )
+    )
+    statuses = [
+        OracleStatus(active=False, epoch=0, source_active=False, source_epoch=0),
+        OracleStatus(active=False, epoch=0, source_active=False, source_epoch=0),
+        OracleStatus(active=True, epoch=1, source_active=True, source_epoch=1),
+    ]
+    calls = {"activate": 0}
+
+    def get_oracle_status() -> OracleStatus:
+        return statuses.pop(0) if statuses else OracleStatus(True, 1, True, 1)
+
+    def activate_oracle() -> ActivationResponse:
+        calls["activate"] += 1
+        return ActivationResponse(status="activating", epoch=0)
+
+    monkeypatch.setattr(manager, "get_oracle_status", get_oracle_status)
+    monkeypatch.setattr(manager, "activate_oracle", activate_oracle)
+
+    result = manager.ensure_oracle_active(
+        activate=True, timeout=1.0, poll_interval=0.01
+    )
+
+    assert result.active is True
+    assert calls["activate"] == 1

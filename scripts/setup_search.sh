@@ -3,29 +3,28 @@
 #
 # The Lyquid constructor only *stages* the search oracle committee. This script
 # performs the node-side follow-up that the constructor cannot do:
-#   1. resolve the deployed Lyquid contract and its LVM oracle target,
-#   2. advance and finalize the first search-oracle epoch,
-#   3. POST /nodes/register on each node so it submits a certified
+#   1. activate the first search-oracle epoch through `POST /oracle/activate`,
+#   2. POST /nodes/register on each node so it submits a certified
 #      register_node(node_id) call for its own identity.
 #
-# It deliberately performs no bartender ed25519/qx/qy mappings and does not
-# hardcode node keys or coordinates. It is safe to run repeatedly: oracle epoch
-# operations are no-ops once active and node registration is idempotent.
+# Activation is idempotent, and `make prepare-nodes` already calls the same
+# endpoint. This script is safe to run repeatedly and works on an existing
+# deployment.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 NODES_JSON="${NODES_JSON:-tests/fixture/nodes.json}"
-RPC="${RPC:-http://127.0.0.1:10087/api}"
 REGISTER_TIMEOUT="${REGISTER_TIMEOUT:-60}"
+ACTIVATION_TIMEOUT="${ACTIVATION_TIMEOUT:-60}"
 
 if [[ ! -f "$NODES_JSON" ]]; then
   echo "missing $NODES_JSON; run scripts/prep_nodes.py first" >&2
   exit 1
 fi
 
-for command in jq curl cast shaker; do
+for command in jq curl; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "required command not found: $command" >&2
     exit 1
@@ -39,33 +38,34 @@ if [[ -z "$Lyquid" || "$Lyquid" == "null" ]]; then
 fi
 LyquidLabel="${Lyquid#Lyquid-}"
 
-Contract="$(
-  shaker list -o json |
-    jq -r --arg id "$Lyquid" '.lyquids[] | select(.lyquid_id == $id) | .contract' |
-    head -n 1
+first_host="$(
+  jq -r --arg label "$LyquidLabel" \
+    '.nodes[0] | "\($label).\(.node_id | sub("^Node-"; ""))"' "$NODES_JSON"
 )"
-if [[ -z "$Contract" || "$Contract" == "null" ]]; then
-  echo "could not resolve the sequencing contract for $Lyquid" >&2
+first_port="$(jq -r '.nodes[0].port' "$NODES_JSON")"
+activate_url="http://127.0.0.1:${first_port}/oracle/activate"
+
+echo "Lyquid: $Lyquid"
+echo "Activating search oracle..."
+deadline=$((SECONDS + ACTIVATION_TIMEOUT))
+active=0
+while (( SECONDS < deadline )); do
+  activate_body="$(
+    curl -sS -X POST -H "Host: ${first_host}" -H 'content-length: 0' \
+      "$activate_url" 2>/dev/null || true
+  )"
+  activate_state="$(jq -r '.status // empty' <<<"${activate_body}" 2>/dev/null || true)"
+  if [[ "$activate_state" == "active" ]]; then
+    echo "  search oracle active (epoch $(jq -r '.epoch' <<<"${activate_body}"))"
+    active=1
+    break
+  fi
+  sleep 1
+done
+if (( active == 0 )); then
+  echo "search oracle did not become active within ${ACTIVATION_TIMEOUT}s" >&2
   exit 1
 fi
-
-Target="$(shaker to-hex "$Lyquid")"
-echo "Lyquid:  $Lyquid"
-echo "Contract: $Contract"
-echo "Target:  $Target"
-
-# These are instance/eth-exported oracle helpers. They submit the staged
-# committee to the target and then finalize it on the source, which activates
-# the first search oracle epoch.
-echo "Advancing search oracle epoch..."
-cast call --rpc-url "$RPC" "$Contract" \
-  '__lyquor_oracle_advance_epoch(string,address,bool)' search "$Target" false >/dev/null
-echo "Finalizing search oracle epoch..."
-cast call --rpc-url "$RPC" "$Contract" \
-  '__lyquor_oracle_finalize_epoch(string,address,bool)' search "$Target" false >/dev/null
-
-# Give the nodes a moment to observe the finalized epoch before self-registering.
-sleep "${EPOCH_SETTLE_SECONDS:-2}"
 
 register_node() {
   local index="$1"
@@ -113,8 +113,6 @@ fi
 # Wait for the certified registration calls to be executed and visible in the
 # shared NodeRegistry before returning.
 expected_nodes="$(jq -r '[.nodes[].node_id] | sort | join(",")' "$NODES_JSON")"
-first_host="$(jq -r --arg label "$LyquidLabel" '.nodes[0] | "\($label).\(.node_id | sub("^Node-"; ""))"' "$NODES_JSON")"
-first_port="$(jq -r '.nodes[0].port' "$NODES_JSON")"
 list_url="http://127.0.0.1:${first_port}/nodes/list"
 deadline=$((SECONDS + REGISTER_TIMEOUT))
 while (( SECONDS < deadline )); do

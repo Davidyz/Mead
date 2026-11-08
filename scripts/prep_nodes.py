@@ -16,9 +16,12 @@ This performs the full local devnet preparation:
 4. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
    ports, and selected fixture skill names for integration tests.
 5. Upload each node's fixture directory with ``uv run mead --upload-only``.
+6. Activate the constructor-staged search oracle through ``POST /oracle/activate``
+   and wait for ``GET /oracle/status`` to report it active.
 
-The constructor only stages the oracle committee. Activate the first epoch and
-trigger node self-registration with ``scripts/setup_search.sh`` after deployment.
+The constructor only stages the oracle committee. This script activates the
+first epoch; trigger node self-registration with ``scripts/setup_search.sh``
+after deployment.
 
 Skills containing non-UTF-8 resources are excluded because the canonical skill
 format only supports text resources.
@@ -75,6 +78,7 @@ DEFAULT_ORACLE_THRESHOLD = 2
 NODE_ID_BYTES = 32
 DEFAULT_DEVNET_DIR = Path.home() / ".shakenup" / "ldk" / "docker" / "multi"
 DEFAULT_NODE_FUNDING_ETH = "10"
+ORACLE_ACTIVATION_TIMEOUT = 120.0
 
 
 @dataclass(frozen=True)
@@ -483,13 +487,17 @@ def upload_skills(node: Node, fixture_dir: Path, lyquid_id: str) -> None:
     )
 
 
-def wait_for_lyquid(node: Node, lyquid_id: str) -> None:
+def _node_headers(node: Node, lyquid_id: str) -> dict[str, str]:
     lyquid_label = lyquid_id.removeprefix("Lyquid-")
     node_label = node.node_id.removeprefix("Node-")
-    headers = {
+    return {
         "accept": "application/json",
         "Host": f"{lyquid_label}.{node_label}",
     }
+
+
+def wait_for_lyquid(node: Node, lyquid_id: str) -> None:
+    headers = _node_headers(node, lyquid_id)
     url = f"http://127.0.0.1:{node.port}/skills/list"
     deadline = time.monotonic() + NODE_READY_TIMEOUT
 
@@ -508,6 +516,42 @@ def wait_for_lyquid(node: Node, lyquid_id: str) -> None:
 
     raise RuntimeError(
         f"Lyquid {lyquid_id} did not become ready on node{node.index}: {last_error}"
+    )
+
+
+def activate_search_oracle(node: Node, lyquid_id: str) -> None:
+    """Activate the first search-oracle epoch and wait until it is active.
+
+    The endpoint is idempotent and submits any still-needed epoch work on each
+    call, so poll it rather than relying on a background retry.
+    """
+    headers = _node_headers(node, lyquid_id)
+    base_url = f"http://127.0.0.1:{node.port}"
+
+    print(f"Activating search oracle via node{node.index}...")
+    deadline = time.monotonic() + ORACLE_ACTIVATION_TIMEOUT
+    last_error = "no response"
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.post(
+                f"{base_url}/oracle/activate",
+                headers=headers,
+                timeout=30.0,
+            )
+        except httpx.HTTPError as error:
+            last_error = str(error)
+        else:
+            if response.status_code == 200:
+                body = response.json()
+                if body.get("status") == "active":
+                    print(f"Search oracle active (epoch {body.get('epoch')}).")
+                    return
+            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+        time.sleep(1)
+
+    raise RuntimeError(
+        "search oracle did not become active within "
+        f"{ORACLE_ACTIVATION_TIMEOUT:.0f}s: {last_error}"
     )
 
 
@@ -616,6 +660,8 @@ def main() -> None:
 
     for node in nodes:
         upload_skills(node, fixture_dirs[node.index], lyquid_id)
+
+    activate_search_oracle(nodes[0], lyquid_id)
 
     deployed_skills = collect_deployed_skills(nodes, lyquid_id)
     print_deployed_skills(nodes, deployed_skills)

@@ -77,6 +77,16 @@ impl QueryRegistry {
         self.queries.contains_key(query_id)
     }
 
+    /// Returns true if an identical query is already registered.
+    ///
+    /// Query IDs are derived from every signed field, so an identical query has
+    /// the same ID. Registration callers treat this as an idempotent no-op: a
+    /// repeated submission (for example two identical searches created in the
+    /// same second) is not an error and does not re-announce the query.
+    pub fn contains_identical(&self, query: &SearchQuery) -> bool {
+        self.queries.get(&query.query_id) == Some(query)
+    }
+
     /// Records a node as having submitted a result for this query.
     pub fn mark_responder(&mut self, query_id: Hash, responder: NodeID) -> LyquidResult<()> {
         let responders = self
@@ -433,6 +443,20 @@ mod tests {
         let mut registry = QueryRegistry::default();
         registry.insert(query.clone()).unwrap();
         assert!(registry.insert(query).is_err());
+    }
+
+    #[lyquid_test::test]
+    fn identical_queries_are_recognised_as_already_registered() {
+        let query = valid_query();
+        let mut registry = QueryRegistry::default();
+
+        assert!(!registry.contains_identical(&query));
+        registry.insert(query.clone()).unwrap();
+        assert!(registry.contains_identical(&query));
+
+        let mut same_id_different_signature = query.clone();
+        same_id_different_signature.set_signature(vec![1]);
+        assert!(!registry.contains_identical(&same_id_different_signature));
     }
 
     fn registered_query() -> (QueryRegistry, Hash, NodeID, NodeID) {

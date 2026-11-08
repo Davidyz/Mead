@@ -201,7 +201,16 @@ fn plan_search_query(
     let query_id = query.query_id;
     let initiator = query.sender;
 
-    // `insert` validates the query, including that its text matches the digest.
+    // Query IDs commit to (digest, k, timestamp, sender) and timestamps have
+    // one-second resolution, so two identical searches created in the same
+    // second share an ID. Re-registering the same query is an idempotent no-op
+    // rather than a failure after the client already received `202 Accepted`.
+    if query_registry.contains_identical(&query) {
+        return Ok(());
+    }
+
+    // `insert` validates the query, including that its text matches the digest,
+    // and still rejects a different query that happens to reuse this ID.
     query_registry.insert(query)?;
 
     // Snapshot the peers at registration time, excluding the initiating node.

@@ -18,10 +18,11 @@ This performs the full local devnet preparation:
 5. Upload each node's fixture directory with ``uv run mead --upload-only``.
 6. Activate the constructor-staged search oracle through ``POST /oracle/activate``
    and wait for ``GET /oracle/status`` to report it active.
+7. Self-register every node through ``POST /nodes/register`` and wait for the
+   shared ``NodeRegistry`` to contain all of them.
 
-The constructor only stages the oracle committee. This script activates the
-first epoch; trigger node self-registration with ``scripts/setup_search.sh``
-after deployment.
+Running this script is the full devnet bootstrap; no separate setup-search step
+is required.
 
 Skills containing non-UTF-8 resources are excluded because the canonical skill
 format only supports text resources.
@@ -79,6 +80,7 @@ NODE_ID_BYTES = 32
 DEFAULT_DEVNET_DIR = Path.home() / ".shakenup" / "ldk" / "docker" / "multi"
 DEFAULT_NODE_FUNDING_ETH = "10"
 ORACLE_ACTIVATION_TIMEOUT = 120.0
+NODE_REGISTRATION_TIMEOUT = 60.0
 
 
 @dataclass(frozen=True)
@@ -578,6 +580,83 @@ def activate_search_oracle(node: Node, lyquid_id: str) -> None:
     )
 
 
+def register_node(node: Node, lyquid_id: str) -> None:
+    """Submit this node's certified self-registration.
+
+    The endpoint returns 200 when the node is already in the registry and 202
+    when a certified registration call was just submitted. Retry while the
+    oracle is still becoming active (503).
+    """
+    headers = _node_headers(node, lyquid_id)
+    url = f"http://127.0.0.1:{node.port}/nodes/register"
+
+    deadline = time.monotonic() + NODE_REGISTRATION_TIMEOUT
+    last_error = "no response"
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.post(url, headers=headers, timeout=60.0)
+        except httpx.HTTPError as error:
+            last_error = str(error)
+        else:
+            if response.status_code in (200, 202):
+                print(
+                    f"node{node.index} ({node.node_id}): "
+                    f"registered (HTTP {response.status_code})"
+                )
+                return
+            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+        time.sleep(1)
+
+    raise RuntimeError(
+        f"node{node.index} ({node.node_id}) failed to register within "
+        f"{NODE_REGISTRATION_TIMEOUT:.0f}s: {last_error}"
+    )
+
+
+def wait_for_node_registry(nodes: list[Node], lyquid_id: str) -> None:
+    """Wait until the shared NodeRegistry contains every prepared node."""
+    probe = nodes[0]
+    headers = _node_headers(probe, lyquid_id)
+    url = f"http://127.0.0.1:{probe.port}/nodes/list"
+    expected = sorted(node.node_id for node in nodes)
+
+    deadline = time.monotonic() + NODE_REGISTRATION_TIMEOUT
+    last_error = "no response"
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(url, headers=headers, timeout=5.0)
+        except httpx.HTTPError as error:
+            last_error = str(error)
+        else:
+            if response.status_code == 200:
+                try:
+                    actual = sorted(response.json().get("nodes", []))
+                except ValueError:
+                    last_error = "invalid /nodes/list response"
+                else:
+                    if actual == expected:
+                        print(
+                            f"NodeRegistry contains all {len(expected)} "
+                            "registered nodes."
+                        )
+                        return
+                    last_error = f"registered {len(actual)}/{len(expected)}"
+            else:
+                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+        time.sleep(1)
+
+    raise RuntimeError(
+        "NodeRegistry did not contain all nodes within "
+        f"{NODE_REGISTRATION_TIMEOUT:.0f}s: {last_error}"
+    )
+
+
+def register_nodes(nodes: list[Node], lyquid_id: str) -> None:
+    for node in nodes:
+        register_node(node, lyquid_id)
+    wait_for_node_registry(nodes, lyquid_id)
+
+
 def list_deployed_skills(node: Node, lyquid_id: str) -> list[SkillSummary]:
     node_manager = NodeManager(
         CLIArgs(
@@ -685,6 +764,7 @@ def main() -> None:
         upload_skills(node, fixture_dirs[node.index], lyquid_id)
 
     activate_search_oracle(nodes[0], lyquid_id)
+    register_nodes(nodes, lyquid_id)
 
     deployed_skills = collect_deployed_skills(nodes, lyquid_id)
     print_deployed_skills(nodes, deployed_skills)

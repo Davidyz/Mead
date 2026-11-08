@@ -5,7 +5,13 @@ from typing import Any
 import httpx
 import pytest
 
-from mead.node_manager import NodeManager, SkillSummary, UploadSkillResponse
+from mead.node_manager import (
+    NodeManager,
+    NodeRegistrationResponse,
+    OracleStatus,
+    SkillSummary,
+    UploadSkillResponse,
+)
 from mead.skills import Skill
 from mead.utils import CLIArgs
 
@@ -139,3 +145,35 @@ def test_prepare_is_idempotent(devnet: dict[str, Any]) -> None:
     assert result.node_id == node["node_id"]
     assert result.oracle.active is True
     assert result.node_id in result.nodes
+
+
+def test_prepare_accepts_a_prefixless_node_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    canonical = "Node-ve3tav5jw5ico7or34gcb6ni7rtmd35uokriuijygabd3tsltd7fj6ia"
+    manager = NodeManager(
+        CLIArgs(
+            server_url="http://127.0.0.1:1",
+            skill_dir=tmp_path,
+            node_id=canonical.removeprefix("Node-"),
+            lyquid_id="Lyquid-example",
+        )
+    )
+    monkeypatch.setattr(
+        manager,
+        "ensure_oracle_active",
+        lambda **_: OracleStatus(
+            active=True, epoch=1, source_active=True, source_epoch=1
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "register_node",
+        lambda: NodeRegistrationResponse(status="registered"),
+    )
+    monkeypatch.setattr(manager, "list_nodes", lambda: [canonical])
+
+    result = manager.prepare(activate_oracle=True, timeout=1.0, poll_interval=0.01)
+
+    assert result.node_id == canonical
+    assert canonical in result.nodes

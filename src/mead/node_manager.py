@@ -109,6 +109,12 @@ def _strip_id_prefix(value: str, prefix: str) -> str:
     return value.strip().removeprefix(prefix)
 
 
+def _canonical_node_id(node_id: str | None) -> str | None:
+    if not node_id:
+        return None
+    return f"Node-{_strip_id_prefix(node_id, 'Node-')}"
+
+
 def _virtual_host(lyquid_id: str | None, node_id: str | None) -> str | None:
     if not lyquid_id or not node_id:
         return None
@@ -135,7 +141,7 @@ class NodeManager:
     def __init__(self, cli_args: CLIArgs):
         self._server_url = cli_args.server_url.rstrip("/")
         self._host = _virtual_host(cli_args.lyquid_id, cli_args.node_id)
-        self._node_id = cli_args.node_id
+        self._node_id = _canonical_node_id(cli_args.node_id)
 
     def _headers(self, *, content_type: str | None = None) -> dict[str, str]:
         headers = {"accept": "application/json"}

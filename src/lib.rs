@@ -839,6 +839,10 @@ fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Res
 }
 
 // Returns the peer results for a completed search query.
+//
+// On the initiating node the response also includes a locally computed result,
+// so the initiator contributes its own matches. Any other node serves only the
+// on-chain peer results and does not run a query it did not start.
 #[method::instance(export = http, method = "POST", path_prefix = "/search/get")]
 fn search_get_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Response> {
     let query_id = match parse_query_id_request(req.body.as_deref()) {
@@ -872,9 +876,18 @@ fn search_get_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Respon
         .get(&query_id)
         .cloned()
         .ok_or_else(|| invalid_input("query is not registered"))?;
-    let local_result = local_search_result(&ctx, &query)?;
+
+    let is_initiator = ctx.network.query_registry.initiator_node(&query_id) == Some(ctx.node_id);
+    let local_result = if is_initiator {
+        Some(local_search_result(&ctx, &query)?)
+    } else {
+        None
+    };
+
     let mut combined = results;
-    combined.push(&local_result);
+    if let Some(local_result) = local_result.as_ref() {
+        combined.push(local_result);
+    }
 
     Ok(search_results_response(query_id, &combined))
 }

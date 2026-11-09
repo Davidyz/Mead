@@ -46,10 +46,13 @@ not upload any local skills. To contribute skills, add `"--skill-dir"` and
   include related words and alternative word forms in the query.
 - `get_skill(digest, detail="skill_md", paths=None)` — fetches a skill by
   digest through `/skills/get`. Start with just `digest`: the default
-  `detail="skill_md"` returns the SKILL.md content and lists available resource
-  paths without downloading them. Then pass `paths=[...]` to fetch only the
-  resources you need. `detail="full"` includes every resource, which can be very
-  large, so use it only when the entire skill is genuinely required.
+  `detail="skill_md"` returns a summary block plus an embedded `SKILL.md`
+  resource, and lists available resource paths without downloading them. Then
+  pass `paths=[...]` to fetch only the resources you need. Files are returned as
+  separate MCP embedded resources (`skill://<digest>/<path>`), so the skill's
+  own Markdown is never wrapped or concatenated with synthetic headings.
+  `detail="full"` includes every resource, which can be very large, so use it
+  only when the entire skill is genuinely required.
 
 ## Uploading Skills
 

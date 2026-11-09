@@ -1,14 +1,18 @@
 """MCP tools backed by the Mead Lyquid HTTP API."""
 
+import mimetypes
 from collections.abc import Iterable
 from typing import Any, Literal
+from urllib.parse import quote
 
+from mcp.types import EmbeddedResource, TextContent, TextResourceContents
 lazy from mcp.server import MCPServer
 
 from .node_manager import NodeManager, SkillSummary
 from .skills import Skill
 
 type SkillDetail = Literal["skill_md", "full"]
+type SkillContent = TextContent | EmbeddedResource
 
 
 def _summary_payload(summary: SkillSummary) -> dict[str, str]:
@@ -19,11 +23,26 @@ def _summary_payload(summary: SkillSummary) -> dict[str, str]:
     }
 
 
+def _mime_type(path: str) -> str:
+    return mimetypes.guess_type(path)[0] or "text/plain"
+
+
+def _resource(
+    digest: str, path: str, contents: str, mime_type: str
+) -> EmbeddedResource:
+    uri = f"skill://{digest}/{quote(path, safe='/')}"
+    return EmbeddedResource(
+        type="resource",
+        resource=TextResourceContents(uri=uri, mime_type=mime_type, text=contents),
+    )
+
+
 def _render_skill(
+    digest: str,
     skill: Skill,
     detail: SkillDetail,
     paths: Iterable[str] | None,
-) -> str:
+) -> list[SkillContent]:
     if detail not in ("skill_md", "full"):
         raise ValueError(f"unsupported detail level: {detail}")
 
@@ -41,13 +60,29 @@ def _render_skill(
             f"Skill {skill.name} does not contain resources: {', '.join(missing)}"
         )
 
-    sections = [f"# {skill.name}", skill.description, skill.instructions]
+    summary = [
+        f"Skill: {skill.name}",
+        f"Description: {skill.description}",
+        f"Digest: {digest}",
+    ]
     if resources:
-        sections.append("## Available resources")
-        sections.extend(f"- {path}" for path in sorted(resources))
+        summary.append("Available resources:")
+        summary.extend(f"- {path}" for path in sorted(resources))
+
+    blocks: list[SkillContent] = [
+        TextContent(type="text", text="\n".join(summary)),
+        _resource(digest, "SKILL.md", skill.instructions, "text/markdown"),
+    ]
     for path in selected:
-        sections.append(f"## Resource: {path}\n\n{resources[path].contents}")
-    return "\n\n".join(sections)
+        blocks.append(
+            _resource(
+                digest,
+                path,
+                resources[path].contents,
+                _mime_type(path),
+            )
+        )
+    return blocks
 
 
 class MeadTools:
@@ -88,22 +123,29 @@ class MeadTools:
         digest: str,
         detail: SkillDetail = "skill_md",
         paths: Iterable[str] | None = None,
-    ) -> str:
+    ) -> list[SkillContent]:
         """Return a skill by digest, starting with just its main body.
 
         Call this first with only ``digest`` (the default ``detail="skill_md"``).
-        That returns the name, description, instructions, and the list of
-        available resource paths without downloading any resources.
+        That returns a text summary block plus an embedded ``SKILL.md`` resource,
+        without downloading any other resources. The summary lists the available
+        resource paths.
 
         Inspect that list, then call again with ``paths=[...]`` to fetch only the
         resources you actually need. Do not use ``detail="full"`` unless you
         genuinely need every resource: full skill bodies can be very large.
 
-        ``detail="skill_md"`` returns the main body and lists available paths;
-        ``detail="full"`` includes every resource. An explicit ``paths`` list
-        includes those resources regardless of ``detail``.
+        Each returned file is a separate MCP embedded resource with its own URI,
+        so the skill's Markdown is not wrapped or concatenated with synthetic
+        headings. ``detail="full"`` includes every resource; an explicit
+        ``paths`` list includes those resources regardless of ``detail``.
         """
-        return _render_skill(self._node_manager.get_skill(digest), detail, paths)
+        return _render_skill(
+            digest,
+            self._node_manager.get_skill(digest),
+            detail,
+            paths,
+        )
 
     def make_mcp_server(self) -> MCPServer:
         mcp_server = MCPServer("mead")

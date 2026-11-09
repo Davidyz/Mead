@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 import pytest
+from mcp.types import EmbeddedResource, TextContent, TextResourceContents
 
 from mead.node_manager import NodeManager
 from mead.tools import MeadTools
@@ -158,9 +159,18 @@ def test_search_lifecycle_completes() -> None:
             for summary in summaries
         )
 
-        skill_md = MeadTools(manager).mcp_get_skill(peer_digest)
-        assert f"# {peer_skill.name}" in skill_md
-        assert peer_skill.instructions in skill_md
+        blocks = MeadTools(manager).mcp_get_skill(peer_digest)
+        summary = "\n".join(
+            block.text for block in blocks if isinstance(block, TextContent)
+        )
+        assert peer_skill.name in summary
+        embedded = [
+            block.resource.text
+            for block in blocks
+            if isinstance(block, EmbeddedResource)
+            and isinstance(block.resource, TextResourceContents)
+        ]
+        assert peer_skill.instructions in "\n".join(embedded)
         return
 
     pytest.fail(f"search lifecycle did not complete after retries: {last_error}")

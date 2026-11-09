@@ -23,7 +23,7 @@ use api::{
 };
 use api::{http_json_response, json_error};
 
-use skill::{AcquiredSkills, Skill, SkillError, SkillManager};
+use skill::{Skill, SkillError, SkillManager};
 use types::invalid_input;
 use types::{
     Bm25Score, CanonicalBytes, NodeRegistry, QueryParams, QueryRegistry, ResultRegistry,
@@ -45,14 +45,13 @@ state! {
     network query_registry: QueryRegistry = QueryRegistry::default();
     network result_registry: ResultRegistry = ResultRegistry::default();
     network node_registry: NodeRegistry = NodeRegistry::default();
-    // Node-local notifications
-    instance ready_queries: Vec<Hash> = Vec::new();
     // Canonical skill bytes persisted in instance state so the in-memory
     // manager can be rebuilt after the Lyquid VM restarts.
     instance skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
-    // Peer-provided skill bytes persisted for `/skills/get`. The in-memory
-    // acquired cache is per-call, so it cannot span the search trigger and a
-    // later HTTP request.
+    // Peer-provided skill bytes persisted for `/skills/get`.
+    // TODO: bound this map. There is no direct fetch-by-digest path to another
+    // node yet, so evicting an entry would make a skill whose digest the caller
+    // still holds unavailable until another search returns it. Tracked in #27.
     instance acquired_skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
 }
 
@@ -437,7 +436,7 @@ fn plan_search_query(
     Ok(())
 }
 
-// Stores a result and triggers completion when every expected peer has answered.
+// Stores a verified result submitted by an expected peer.
 //
 // Results reach consensus state only through the certified `coordinate_result`
 // entry point. In the deployed instance code, the initiator certifies that call
@@ -468,44 +467,6 @@ fn record_search_result(
     result_registry.insert(&query, result)?;
     query_registry.mark_responder(query_id, sender)?;
 
-    let position = lyquor_api::chain_pos()?;
-    if query_registry.is_complete(&query_id, position) {
-        trigger!(
-            check_query_ready(query_id: HashBytes = HashBytes::from(query_id)),
-            TriggerMode::Commit
-        );
-    }
-
-    Ok(())
-}
-
-// Marks a query as finished once its response deadline has passed.
-//
-// Any caller can expire a query after its deadline, so one unresponsive peer
-// cannot leave the initiating node waiting forever. The check uses the sequenced
-// chain position, which is identical on every node.
-#[method::network]
-fn expire_query(ctx: &_, query_id: HashBytes) -> LyquidResult<()> {
-    let query_id = Hash::from(query_id);
-
-    if !ctx.network.query_registry.contains(&query_id) {
-        return Err(invalid_input("query is not registered"));
-    }
-
-    let deadline = ctx
-        .network
-        .query_registry
-        .deadline(&query_id)
-        .ok_or_else(|| invalid_input("query has no response deadline"))?;
-
-    if lyquor_api::chain_pos()? < deadline {
-        return Err(invalid_input("query response deadline has not passed"));
-    }
-
-    trigger!(
-        check_query_ready(query_id: HashBytes = HashBytes::from(query_id)),
-        TriggerMode::Commit
-    );
     Ok(())
 }
 
@@ -531,12 +492,8 @@ fn announce_search(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
         .map(|nodes| nodes.to_vec())
         .unwrap_or_default();
 
-    // Nothing to wait for, so the query is already ready on this node.
+    // Nothing to wait for: completion is derived from the registry state.
     if expected_nodes.is_empty() {
-        let mut ready = ctx.instance.ready_queries.write();
-        if !ready.contains(&query_id) {
-            ready.push(query_id);
-        }
         return Ok(());
     }
 
@@ -748,18 +705,13 @@ fn submit_peer_result_impl(
         }
     }
 
-    // Persist and cache peer bodies only after every verification step passes,
-    // so rejected replies cannot populate `/skills/get`. They stay out of the
+    // Persist peer bodies only after every verification step passes, so
+    // rejected replies cannot populate `/skills/get`. They stay out of the
     // local BM25 corpus.
     {
         let mut blobs = ctx.instance.acquired_skill_blobs.write();
-        for ((digest, body), skill) in matched_digests
-            .iter()
-            .zip(matched_blobs.iter())
-            .zip(matched_skills.iter())
-        {
+        for (digest, body) in matched_digests.iter().zip(matched_blobs.iter()) {
             blobs.insert(*digest, body.clone());
-            AcquiredSkills::shared().record(*digest, skill);
         }
     }
 
@@ -892,54 +844,6 @@ fn validate(
         }
         _ => Ok(false),
     }
-}
-
-// Checks whether a query is complete and records it locally on the initiating node.
-//
-// Triggered after a result submission or an expiry, and also callable on demand so
-// an initiating node can recover a completion signal it missed (for example after
-// a restart).
-#[method::instance]
-fn check_query_ready(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
-    let query_id = Hash::from(query_id);
-
-    let position = lyquor_api::chain_pos()?;
-    if !ctx.network.query_registry.is_complete(&query_id, position) {
-        return Ok(());
-    }
-    if ctx.network.query_registry.initiator_node(&query_id) != Some(ctx.node_id) {
-        return Ok(());
-    }
-
-    let mut ready = ctx.instance.ready_queries.write();
-    if !ready.contains(&query_id) {
-        ready.push(query_id);
-    }
-    Ok(())
-}
-
-// Returns the queries whose results are complete on the initiating node.
-#[method::instance]
-fn get_ready_queries(ctx: &_) -> LyquidResult<Vec<HashBytes>> {
-    Ok(ctx
-        .instance
-        .ready_queries
-        .read()
-        .iter()
-        .copied()
-        .map(HashBytes::from)
-        .collect())
-}
-
-// Removes a handled query from this node's ready list.
-#[method::instance]
-fn ack_ready_query(ctx: &mut _, query_id: HashBytes) -> LyquidResult<()> {
-    let query_id = Hash::from(query_id);
-    ctx.instance
-        .ready_queries
-        .write()
-        .retain(|ready| *ready != query_id);
-    Ok(())
 }
 
 // Returns a registered query by its canonical ID.
@@ -1298,9 +1202,8 @@ fn list_skills(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response>
 // - `400 Bad Request`: missing, empty, or invalid digest.
 // - `404 Not Found`: no skill with that digest is cached or loaded locally.
 //
-// Peer skills are served from the per-call cache or the peer bodies persisted
-// when they arrive during a search UPC; locally uploaded skills fall back to
-// this node's catalog.
+// Peer skills are served from the bodies persisted when they arrive during a
+// search UPC; locally uploaded skills fall back to this node's catalog.
 #[method::instance(export = http, method = "POST", path_prefix = "/skills/get")]
 fn get_skill_at_skills_get(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
     handle_skill_get(&mut ctx, &req)

@@ -22,8 +22,6 @@ def clone_skills_repo(commit: str | None = None):
 def main():
     clone_skills_repo(os.environ.get("SKILLS_COMMIT", DEFAULT_SKILLS_COMMIT))
 
-    # TODO: allocate the skills to nodes when we have a devnet docker-compose.yaml
-
 
 if __name__ == "__main__":
     main()

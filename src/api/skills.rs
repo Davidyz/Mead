@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use lyquid::prelude::*;
 
-use crate::skill::{AcquiredSkills, Skill, SkillError, SkillManager};
+use crate::skill::{Skill, SkillError, SkillManager};
 use crate::types::{invalid_input, parse_hash};
 
 use super::http::{http_json_response, json_error};
@@ -55,10 +55,10 @@ pub(crate) fn parse_skill_get_request(body: Option<&[u8]>) -> Result<Hash, Strin
 
 /// Serves the full body of a skill by digest.
 ///
-/// Peer-provided skills are served from the per-call cache or the peer bodies
-/// persisted in instance state when results arrive during a search UPC. Locally
-/// uploaded skills fall back to the node-local catalog. The body uses the same
-/// JSON skill structure accepted by `POST /skills/upload`.
+/// Peer-provided skills are served from the bodies persisted in instance state
+/// when results arrive during a search UPC. Locally uploaded skills fall back to
+/// the node-local catalog. The body uses the same JSON skill structure accepted
+/// by `POST /skills/upload`.
 pub(crate) fn handle_skill_get(
     ctx: &mut crate::__lyquid::InstanceContext,
     req: &http::Request,
@@ -67,10 +67,6 @@ pub(crate) fn handle_skill_get(
         Ok(digest) => digest,
         Err(message) => return Ok(http_json_response(400, &json_error(&message))),
     };
-
-    if let Some(skill) = AcquiredSkills::shared().get(&digest) {
-        return skill_json_response(&skill);
-    }
 
     let acquired_blob = {
         let blobs = ctx.instance.acquired_skill_blobs.read();
@@ -83,7 +79,6 @@ pub(crate) fn handle_skill_get(
                 return Ok(http_json_response(500, &json_error(&error.to_string())));
             }
         };
-        AcquiredSkills::shared().record(digest, &skill);
         return skill_json_response(&skill);
     }
 

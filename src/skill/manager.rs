@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use lyquid::prelude::{Hash, HashMap, new_hashmap};
 
-use super::{ScoredSkill, Skill, SkillError, SkillResult};
+use super::{Skill, SkillError, SkillResult};
 
 static SHARED: OnceLock<Arc<SkillManager>> = OnceLock::new();
 
@@ -91,22 +91,6 @@ impl SkillManager {
     pub fn bundle(&self, digest: &Hash) -> SkillResult<Arc<[u8]>> {
         let skill = self.get(digest).ok_or(SkillError::NotFound)?;
         Ok(skill.canonical_bytes()?.into())
-    }
-
-    /// Runs a local search and returns the top-k skill digests.
-    pub fn local_search(&self, query: &str, k: usize) -> SkillResult<Vec<Hash>> {
-        let _ = (query, k);
-        unimplemented!("SkillManager::local_search")
-    }
-
-    /// Computes canonical scores using exactly the supplied skills as the corpus.
-    pub fn score_local_corpus(
-        &self,
-        query: &str,
-        digests: &[Hash],
-    ) -> SkillResult<Vec<ScoredSkill>> {
-        let _ = (query, digests);
-        unimplemented!("SkillManager::score_local_corpus")
     }
 
     fn read_skills(&self) -> RwLockReadGuard<'_, HashMap<Hash, Arc<Skill>>> {

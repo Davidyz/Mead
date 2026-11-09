@@ -98,10 +98,6 @@ const CANONICAL_VERSION: u8 = 1;
 /// Domain separation for skill digests.
 const DIGEST_DOMAIN: &[u8] = b"mead/skill/v1";
 
-/// Canonical integer representation of a BM25 score.
-// TODO: unify this alias with the on-chain `SkillMatch::bm25_score` type when the scoring PR lands.
-pub type Bm25Score = i64;
-
 /// A skill together with its searchable metadata and resource files.
 ///
 /// The layout follows `skill_core::Skill`.
@@ -394,15 +390,6 @@ impl SkillJson {
         skill.digest()?;
         Ok(skill)
     }
-}
-
-/// A skill digest and its canonical BM25 score.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScoredSkill {
-    /// Digest of the matched skill.
-    pub digest: Hash,
-    /// Canonical BM25 score.
-    pub score: Bm25Score,
 }
 
 #[cfg(test)]

@@ -37,7 +37,6 @@ For example, in pi-agent, use the following:
 
 ## MCP Tools
 
-- `list_skill` — lists the local node's skills with name, description, and digest.
 - `search_skills(query, top_k=5)` — searches the network and returns an object
   with `skills` (name, description, digest), `timed_out`, received/expected and
   verified/rejected counts, and any `unresolved_digests`. Use the digest with

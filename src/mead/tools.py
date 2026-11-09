@@ -51,20 +51,10 @@ def _render_skill(
 
 
 class MeadTools:
-    """MCP tool implementations for listing, searching, and fetching skills."""
+    """MCP tool implementations for searching and fetching skills."""
 
     def __init__(self, node_manager: NodeManager):
         self._node_manager = node_manager
-
-    def mcp_list_skill(self) -> list[dict[str, str]]:
-        """List every skill name, description, and digest on this node."""
-        return [
-            _summary_payload(summary)
-            for summary in sorted(
-                self._node_manager.list_skills(),
-                key=lambda item: (item.name, item.digest),
-            )
-        ]
 
     def mcp_search_skills(self, query: str, top_k: int = 5) -> dict[str, Any]:
         """Search the network for skills using a lexical BM25 query.
@@ -106,7 +96,6 @@ class MeadTools:
 
     def make_mcp_server(self) -> MCPServer:
         mcp_server = MCPServer("mead")
-        mcp_server.add_tool(self.mcp_list_skill, name="list_skill")
         mcp_server.add_tool(self.mcp_search_skills, name="search_skills")
         mcp_server.add_tool(self.mcp_get_skill, name="get_skill")
         return mcp_server

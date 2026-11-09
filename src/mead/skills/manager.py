@@ -33,9 +33,3 @@ class SkillManager:
 
     def list_skills(self) -> list[Skill]:
         return list(self._skills.values())
-
-    def get_skill(self, name: str) -> Skill | None:
-        for skill in self.list_skills():
-            if skill.name == name or skill.id == name:
-                return skill
-        return None

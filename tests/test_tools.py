@@ -23,9 +23,6 @@ class FakeNodeManager:
         self.search_calls: list[tuple[str, int]] = []
         self.get_calls: list[str] = []
 
-    def list_skills(self) -> list[SkillSummary]:
-        return list(self.summaries)
-
     def search_skills(self, query: str, top_k: int = 5) -> SearchOutcome:
         self.search_calls.append((query, top_k))
         return SearchOutcome(
@@ -41,19 +38,6 @@ class FakeNodeManager:
     def get_skill(self, digest: str) -> Skill:
         self.get_calls.append(digest)
         return self.skills[digest]
-
-
-def test_mcp_list_skill_returns_names_descriptions_and_digests() -> None:
-    summaries = [
-        SkillSummary("zeta", "The last skill", "digest-z"),
-        SkillSummary("alpha", "The first skill", "digest-a"),
-    ]
-    tools = MeadTools(cast(NodeManager, FakeNodeManager(summaries, {})))
-
-    assert tools.mcp_list_skill() == [
-        {"name": "alpha", "description": "The first skill", "digest": "digest-a"},
-        {"name": "zeta", "description": "The last skill", "digest": "digest-z"},
-    ]
 
 
 def test_mcp_search_skills_passes_query_and_top_k() -> None:

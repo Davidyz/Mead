@@ -54,6 +54,11 @@ submitter from node1's devnet account by default because self-registration is a
 certified transaction. Use `--no-fund-nodes` to skip that, or `--funding-eth` /
 `--devnet-dir` / `--anvil-container` to override the defaults.
 
+For local debugging, the script also writes the deployed Lyquid and node1 IDs to
+the repository-root `.env` (`MEAD_LYQUID_ID` and `MEAD_NODE_ID`). The file is
+gitignored and is only a convenience for starting the MCP without repeating
+flags; pass the IDs explicitly for other nodes or deployments.
+
 To reuse an existing deployment instead of deploying again, pass its Lyquid ID:
 
 ```bash

@@ -7,7 +7,7 @@ from pathlib import Path
 @dataclass
 class CLIArgs:
     server_url: str
-    skill_dir: Path
+    skill_dir: Path | None
     node_id: str
     lyquid_id: str
 
@@ -25,23 +25,25 @@ def arg_parser() -> ArgumentParser:
     )
     parser.add_argument(
         "--skill-dir",
-        required=True,
-        help="Path to the directory that contains skills.",
+        help=(
+            "Path to the directory that contains skills. Omit it to run a "
+            "search-only server that does not upload skills."
+        ),
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--upload-only",
         action="store_true",
         default=False,
-        help="Only upload the skills to the node. Do not start the MCP.",
+        help=("Only upload the skills to the node and exit. Requires --skill-dir."),
     )
     mode.add_argument(
         "--prepare-only",
         action="store_true",
         default=False,
         help=(
-            "Upload skills, wait for the search oracle, self-register the node, "
-            "and exit without starting the MCP."
+            "Upload skills when --skill-dir is provided, wait for the search "
+            "oracle, self-register the node, and exit without starting the MCP."
         ),
     )
     parser.add_argument(
@@ -84,6 +86,9 @@ def parse_args(args: list[str] | None = None) -> CLIArgs:
         parser.error("--node-id or MEAD_NODE_ID environment variable is required")
     if not lyquid_id:
         parser.error("--lyquid-id or MEAD_LYQUID_ID environment variable is required")
+    skill_dir = Path(parsed.skill_dir) if parsed.skill_dir else None
+    if parsed.upload_only and skill_dir is None:
+        parser.error("--skill-dir is required with --upload-only")
     if parsed.activate_oracle and not parsed.prepare_only:
         parser.error("--activate-oracle requires --prepare-only")
     if parsed.wait_timeout <= 0:
@@ -92,7 +97,7 @@ def parse_args(args: list[str] | None = None) -> CLIArgs:
         parser.error("--poll-interval must be greater than zero")
     return CLIArgs(
         server_url=parsed.server_url,
-        skill_dir=Path(parsed.skill_dir),
+        skill_dir=skill_dir,
         upload_only=parsed.upload_only,
         prepare_only=parsed.prepare_only,
         activate_oracle=parsed.activate_oracle,

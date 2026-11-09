@@ -33,7 +33,8 @@ For example, in pi-agent, use the following:
 ```
 
 `--node-id` and `--lyquid-id` can be omitted when `MEAD_NODE_ID` and
-`MEAD_LYQUID_ID` are set in the environment.
+`MEAD_LYQUID_ID` are set in the environment. `--skill-dir` is optional: omit it
+to run a search-only server that does not contribute any local skills.
 
 ## MCP Tools
 
@@ -49,8 +50,9 @@ For example, in pi-agent, use the following:
 
 ## Uploading Skills
 
-The MCP uploads every skill under `--skill-dir` when it starts. To run only the
-upload step and exit, use `--upload-only`:
+When `--skill-dir` is provided, the MCP uploads every skill under it when it
+starts. Omit `--skill-dir` to run search-only without uploading anything. To run
+only the upload step and exit, use `--upload-only` (which requires `--skill-dir`):
 
 ```bash
 uv run mead \
@@ -68,10 +70,10 @@ plus the node's current skill count.
 
 ## Preparing a Node for Search
 
-`--prepare-only` uploads the local skills, waits for the search oracle, asks the
-node to self-register, and exits without starting the MCP. It is the per-node
-counterpart to the `prepare-nodes` devnet bootstrap: the Lyquid must already be
-deployed with its constructor-staged committee.
+`--prepare-only` uploads the local skills when `--skill-dir` is provided, waits
+for the search oracle, asks the node to self-register, and exits without starting
+the MCP. It is the per-node counterpart to the `prepare-nodes` devnet bootstrap:
+the Lyquid must already be deployed with its constructor-staged committee.
 
 On a committee node (and only there), let the MCP drive activation:
 

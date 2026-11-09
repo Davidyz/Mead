@@ -32,6 +32,11 @@ For example, in pi-agent, use the following:
 }
 ```
 
+`--node-id` and `--lyquid-id` can be omitted when `NODE_ID` and `LYQUID_ID` are
+set in the environment or in the repository-root `.env` file. `mead` loads
+`.env` with `python-dotenv` at startup, and `make prepare-nodes` writes both IDs
+for node 1 after a successful bootstrap.
+
 ## MCP Tools
 
 - `list_skill` — lists the local node's skills with name, description, and digest.

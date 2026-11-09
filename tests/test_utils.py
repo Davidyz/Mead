@@ -5,6 +5,12 @@ import pytest
 from mead.utils import parse_args
 
 
+@pytest.fixture(autouse=True)
+def clear_id_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NODE_ID", raising=False)
+    monkeypatch.delenv("LYQUID_ID", raising=False)
+
+
 def _base_args(*extra: str) -> list[str]:
     return [
         "--server-url",
@@ -17,6 +23,35 @@ def _base_args(*extra: str) -> list[str]:
         "Lyquid-example",
         *extra,
     ]
+
+
+def test_ids_fall_back_to_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NODE_ID", "Node-from-env")
+    monkeypatch.setenv("LYQUID_ID", "Lyquid-from-env")
+
+    args = parse_args(["--skill-dir", "tests/fixture/node1"])
+
+    assert args.node_id == "Node-from-env"
+    assert args.lyquid_id == "Lyquid-from-env"
+
+
+def test_explicit_ids_override_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NODE_ID", "Node-from-env")
+    monkeypatch.setenv("LYQUID_ID", "Lyquid-from-env")
+
+    args = parse_args(
+        [
+            "--skill-dir",
+            "tests/fixture/node1",
+            "--node-id",
+            "Node-flag",
+            "--lyquid-id",
+            "Lyquid-flag",
+        ]
+    )
+
+    assert args.node_id == "Node-flag"
+    assert args.lyquid_id == "Lyquid-flag"
 
 
 def test_prepare_only_flags_are_parsed() -> None:

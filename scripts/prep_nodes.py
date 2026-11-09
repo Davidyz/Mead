@@ -11,14 +11,16 @@ This performs the full local devnet preparation:
    the configured threshold. Publishing to the devnet's OCI registry lets the
    other nodes pull the image; without it only the node that received the deploy
    can host the Lyquid.
-3. Create ``tests/fixture/node{1,2,3,4}/`` and copy four supported skills into
-   each node directory.
+3. Create ``tests/fixture/node{1,2,3,4}/`` and distribute all supported skills
+   evenly across the nodes that are not skipped. Use ``--skip-nodes 1,2`` to
+   leave nodes 1 and 2 without skills; skipped nodes still get an empty fixture
+   directory.
 4. Write ``tests/fixture/nodes.json`` with the Lyquid ID, node IDs, containers,
    ports, and selected fixture skill names for integration tests.
 5. Prepare every node with ``uv run mead --prepare-only``: upload the fixture
    directory, activate the constructor-staged search oracle on the first node,
    self-register the node, and wait until the shared ``NodeRegistry`` contains
-   it.
+   it. Skipped nodes upload no skills.
 6. Write the Lyquid and first-node IDs to the repository-root ``.env`` so the
    MCP can start without repeating ``--node-id``/``--lyquid-id``.
 
@@ -418,14 +420,61 @@ def supported_skills() -> list[Path]:
     return supported
 
 
-def select_fixture_skills(skills: list[Path]) -> list[list[Path]]:
+def parse_skipped_nodes(value: str) -> set[int]:
+    """Parse a comma-separated list of 1-based node indexes."""
+    skipped: set[int] = set()
+    for raw in value.split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        try:
+            index = int(item)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(
+                f"invalid node index {item!r}; expected an integer"
+            ) from error
+        if not 1 <= index <= NODE_COUNT:
+            raise argparse.ArgumentTypeError(
+                f"node index {index} is out of range 1..{NODE_COUNT}"
+            )
+        skipped.add(index)
+    return skipped
+
+
+def select_fixture_skills(skills: list[Path], num_nodes: int) -> list[list[Path]]:
+    """Split all skills as evenly as possible across ``num_nodes`` nodes."""
+    if num_nodes <= 0:
+        raise ValueError("num_nodes must be greater than zero")
+
     seed = os.environ.get("MEAD_FIXTURE_SEED")
     rng = random.Random(int(seed)) if seed is not None else random.Random()
-    selected = rng.sample(skills, NODE_COUNT * SKILLS_PER_NODE)
-    return [
-        selected[index * SKILLS_PER_NODE : (index + 1) * SKILLS_PER_NODE]
-        for index in range(NODE_COUNT)
-    ]
+    shuffled = list(skills)
+    rng.shuffle(shuffled)
+
+    base, remainder = divmod(len(shuffled), num_nodes)
+    assignments: list[list[Path]] = []
+    start = 0
+    for index in range(num_nodes):
+        size = base + (1 if index < remainder else 0)
+        assignments.append(shuffled[start : start + size])
+        start += size
+    return assignments
+
+
+def assign_fixture_skills(
+    nodes: list[Node], skills: list[Path], skipped: set[int]
+) -> list[list[Path]]:
+    """Assign all skills across the nodes that are not skipped."""
+    active_nodes = [node for node in nodes if node.index not in skipped]
+    if not active_nodes:
+        raise RuntimeError("all nodes are skipped; nothing to prepare")
+
+    active_assignments = select_fixture_skills(skills, len(active_nodes))
+    assignments_by_node = {
+        node.index: assignment
+        for node, assignment in zip(active_nodes, active_assignments, strict=True)
+    }
+    return [assignments_by_node.get(node.index, []) for node in nodes]
 
 
 def prepare_fixture(assignments: list[list[Path]]) -> dict[int, Path]:
@@ -440,7 +489,7 @@ def prepare_fixture(assignments: list[list[Path]]) -> dict[int, Path]:
             shutil.copytree(skill_dir, node_dir / skill_dir.name)
         fixture_dirs[index] = node_dir
         names = ", ".join(skill_dir.name for skill_dir in skill_dirs)
-        print(f"node{index}: {names}")
+        print(f"node{index}: {names or '(no skills)'}")
     return fixture_dirs
 
 
@@ -619,6 +668,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not top up node submitter accounts.",
     )
+    parser.add_argument(
+        "--skip-nodes",
+        type=parse_skipped_nodes,
+        default=set(),
+        metavar="INDEXES",
+        help=(
+            "Comma-separated node indexes that must not receive skills, e.g. "
+            "'1,2'. Their skills are redistributed across the remaining nodes."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -647,7 +706,7 @@ def main() -> None:
         print(f"Deployed Lyquid: '{lyquid_id}'")
 
     skills = supported_skills()
-    assignments = select_fixture_skills(skills)
+    assignments = assign_fixture_skills(nodes, skills, args.skip_nodes)
     fixture_dirs = prepare_fixture(assignments)
     write_nodes_json(nodes, lyquid_id, assignments)
 

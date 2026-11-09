@@ -5,7 +5,10 @@ SHAKER_NORM := $(shell echo $(SHAKER_VER) | sed 's/+.*//')
 
 # Optional existing Lyquid ID for `make prepare-nodes`.
 LYQUID_ID ?=
-PREP_NODES_ARGS := $(if $(LYQUID_ID),--lyquid-id $(LYQUID_ID),)
+# Comma-separated node indexes that should not receive skills.
+SKIP_UPLOAD_NODES ?=
+PREP_NODES_ARGS := $(if $(LYQUID_ID),--lyquid-id $(LYQUID_ID),) \
+	$(if $(SKIP_UPLOAD_NODES),--skip-nodes $(SKIP_UPLOAD_NODES),)
 
 
 .PHONY: prepare-skills prepare-nodes check-ldk test cleanup

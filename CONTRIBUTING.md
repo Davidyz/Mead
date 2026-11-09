@@ -54,6 +54,14 @@ submitter from node1's devnet account by default because self-registration is a
 certified transaction. Use `--no-fund-nodes` to skip that, or `--funding-eth` /
 `--devnet-dir` / `--anvil-container` to override the defaults.
 
+To test with some nodes contributing no skills, pass their indexes to
+`SKIP_UPLOAD_NODES`. All supported skills are redistributed across the remaining
+nodes, so nothing is dropped:
+
+```bash
+SKIP_UPLOAD_NODES=1,2 make prepare-nodes
+```
+
 For local debugging, the script also writes the deployed Lyquid and node1 IDs to
 the repository-root `.env` (`MEAD_LYQUID_ID` and `MEAD_NODE_ID`). The file is
 gitignored and is only a convenience for starting the MCP without repeating

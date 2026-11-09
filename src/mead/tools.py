@@ -68,6 +68,9 @@ class MeadTools:
         Returns ``skills`` (name, description, digest), ``timed_out``, the
         received/expected and verified/rejected result counts, and any
         ``unresolved_digests`` whose bodies were unavailable.
+
+        These are summaries only. To read a skill, call ``get_skill`` with just
+        its digest first, then request only the resources you actually need.
         """
         outcome = self._node_manager.search_skills(query, top_k=top_k)
         return {
@@ -86,11 +89,19 @@ class MeadTools:
         detail: SkillDetail = "skill_md",
         paths: Iterable[str] | None = None,
     ) -> str:
-        """Return a skill for an LLM agent, optionally including its files.
+        """Return a skill by digest, starting with just its main body.
 
-        ``detail="skill_md"`` (default) returns the SKILL.md content and lists
-        available resource paths. ``detail="full"`` also includes every resource.
-        Pass ``paths`` to include only those resource contents.
+        Call this first with only ``digest`` (the default ``detail="skill_md"``).
+        That returns the name, description, instructions, and the list of
+        available resource paths without downloading any resources.
+
+        Inspect that list, then call again with ``paths=[...]`` to fetch only the
+        resources you actually need. Do not use ``detail="full"`` unless you
+        genuinely need every resource: full skill bodies can be very large.
+
+        ``detail="skill_md"`` returns the main body and lists available paths;
+        ``detail="full"`` includes every resource. An explicit ``paths`` list
+        includes those resources regardless of ``detail``.
         """
         return _render_skill(self._node_manager.get_skill(digest), detail, paths)
 

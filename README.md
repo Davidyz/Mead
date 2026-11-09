@@ -45,9 +45,11 @@ not upload any local skills. To contribute skills, add `"--skill-dir"` and
   `get_skill`. Matching is lexical BM25 with no stemming or synonyms, so
   include related words and alternative word forms in the query.
 - `get_skill(digest, detail="skill_md", paths=None)` — fetches a skill by
-  digest through `/skills/get`. `detail="skill_md"` returns the SKILL.md
-  content and lists available resource paths; `detail="full"` also includes
-  every resource. Pass `paths` to include only selected resource contents.
+  digest through `/skills/get`. Start with just `digest`: the default
+  `detail="skill_md"` returns the SKILL.md content and lists available resource
+  paths without downloading them. Then pass `paths=[...]` to fetch only the
+  resources you need. `detail="full"` includes every resource, which can be very
+  large, so use it only when the entire skill is genuinely required.
 
 ## Uploading Skills
 

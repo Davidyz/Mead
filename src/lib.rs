@@ -587,17 +587,19 @@ fn search_request(ctx: &mut _, query: SearchQuery) -> LyquidResult<SearchReply> 
     let signature = lyquor_api::sign(Bytes::from(result.signing_payload()), Cipher::Ed25519)?;
     result.set_signature(Vec::from(signature.as_ref()));
 
-    let manager = SkillManager::shared().map_err(|error| invalid_input(error.to_string()))?;
     let mut skill_bodies = Vec::with_capacity(result.matches.len());
-    for skill_match in &result.matches {
-        let skill = manager
-            .get(&skill_match.skill_digest)
-            .ok_or_else(|| invalid_input("matched skill is not loaded on this node"))?;
-        skill_bodies.push(
-            skill
-                .canonical_bytes()
-                .map_err(|error| invalid_input(error.to_string()))?,
-        );
+    if !result.matches.is_empty() {
+        let manager = SkillManager::shared().map_err(|error| invalid_input(error.to_string()))?;
+        for skill_match in &result.matches {
+            let skill = manager
+                .get(&skill_match.skill_digest)
+                .ok_or_else(|| invalid_input("matched skill is not loaded on this node"))?;
+            skill_bodies.push(
+                skill
+                    .canonical_bytes()
+                    .map_err(|error| invalid_input(error.to_string()))?,
+            );
+        }
     }
 
     Ok(SearchReply {

@@ -66,7 +66,6 @@ def test_list_skills_returns_live_node_skills(
     except httpx.TransportError as error:
         pytest.skip(f"devnet node{index} is not available: {error}")
 
-    assert skills
     assert all(isinstance(skill, SkillSummary) for skill in skills)
     assert all(skill.digest for skill in skills)
     assert {skill.name for skill in skills} == set(node["skills"])

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mead.utils import parse_args
@@ -96,13 +98,51 @@ def test_prepare_only_rejects_non_positive_intervals(flags: tuple[str, str]) -> 
         parse_args(_base_args("--prepare-only", *flags))
 
 
-@pytest.mark.parametrize(
-    "missing",
-    ["--skill-dir", "--node-id", "--lyquid-id"],
-)
+@pytest.mark.parametrize("missing", ["--node-id", "--lyquid-id"])
 def test_required_arguments_are_validated(missing: str) -> None:
     args = _base_args()
     index = args.index(missing)
     del args[index : index + 2]
     with pytest.raises(SystemExit):
         parse_args(args)
+
+
+def test_skill_dir_is_optional_for_the_mcp() -> None:
+    args = parse_args(["--node-id", "Node-example", "--lyquid-id", "Lyquid-example"])
+
+    assert args.skill_dir is None
+    assert args.upload_only is False
+
+
+def test_skill_dir_is_optional_for_prepare_only() -> None:
+    args = parse_args(
+        [
+            "--prepare-only",
+            "--node-id",
+            "Node-example",
+            "--lyquid-id",
+            "Lyquid-example",
+        ]
+    )
+
+    assert args.skill_dir is None
+    assert args.prepare_only is True
+
+
+def test_upload_only_requires_a_skill_dir() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--upload-only",
+                "--node-id",
+                "Node-example",
+                "--lyquid-id",
+                "Lyquid-example",
+            ]
+        )
+
+
+def test_skill_dir_is_parsed_as_a_path() -> None:
+    args = parse_args(_base_args())
+
+    assert args.skill_dir == Path("tests/fixture/node1")

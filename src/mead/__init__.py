@@ -18,17 +18,19 @@ async def main_coro() -> None:
     cli_args = parse_args()
 
     node_manager = NodeManager(cli_args)
-    skill_manager = SkillManager(cli_args.skill_dir)
-    skill_manager.load_skills()
 
     uploaded_skill_count = 0
-    loaded_skills = skill_manager.list_skills()
-    for skill in loaded_skills:
-        try:
-            node_manager.upload_skill(skill)
-            uploaded_skill_count += 1
-        except httpx.HTTPError, KeyError, TypeError, ValueError:
-            logger.exception("Failed to upload skill %s", skill.name)
+    loaded_skills = []
+    if cli_args.skill_dir is not None:
+        skill_manager = SkillManager(cli_args.skill_dir)
+        skill_manager.load_skills()
+        loaded_skills = skill_manager.list_skills()
+        for skill in loaded_skills:
+            try:
+                node_manager.upload_skill(skill)
+                uploaded_skill_count += 1
+            except httpx.HTTPError, KeyError, TypeError, ValueError:
+                logger.exception("Failed to upload skill %s", skill.name)
 
     if cli_args.upload_only:
         print(f"Loaded {len(loaded_skills)} skills.")
@@ -42,7 +44,10 @@ async def main_coro() -> None:
         sys.exit(return_val)
 
     if cli_args.prepare_only:
-        print(f"Loaded {len(loaded_skills)} skills.")
+        if cli_args.skill_dir is None:
+            print("No skill directory provided; skipping skill upload.")
+        else:
+            print(f"Loaded {len(loaded_skills)} skills.")
         if uploaded_skill_count != len(loaded_skills):
             print(f"Only {uploaded_skill_count} skills were uploaded successfully.")
             sys.exit(1)

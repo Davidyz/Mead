@@ -18,8 +18,6 @@ For example, in pi-agent, use the following:
         "--from",
         "git+https://github.com/Davidyz/Mead.git",
         "mead",
-        "--skill-dir",
-        "<SKILL_DIR>",
         "--node-id",
         "<NODE_ID>",
         "--lyquid-id",
@@ -32,6 +30,10 @@ For example, in pi-agent, use the following:
 }
 ```
 
+This example is search-only: it does not pass `--skill-dir`, so the server does
+not upload any local skills. To contribute skills, add `"--skill-dir"` and
+`"<SKILL_DIR>"` to `args`.
+
 `--node-id` and `--lyquid-id` can be omitted when `MEAD_NODE_ID` and
 `MEAD_LYQUID_ID` are set in the environment.
 
@@ -43,14 +45,20 @@ For example, in pi-agent, use the following:
   `get_skill`. Matching is lexical BM25 with no stemming or synonyms, so
   include related words and alternative word forms in the query.
 - `get_skill(digest, detail="skill_md", paths=None)` — fetches a skill by
-  digest through `/skills/get`. `detail="skill_md"` returns the SKILL.md
-  content and lists available resource paths; `detail="full"` also includes
-  every resource. Pass `paths` to include only selected resource contents.
+  digest through `/skills/get`. Start with just `digest`: the default
+  `detail="skill_md"` returns a summary block plus an embedded `SKILL.md`
+  resource, and lists available resource paths without downloading them. Then
+  pass `paths=[...]` to fetch only the resources you need. Files are returned as
+  separate MCP embedded resources (`skill://<digest>/<path>`), so the skill's
+  own Markdown is never wrapped or concatenated with synthetic headings.
+  `detail="full"` includes every resource, which can be very large, so use it
+  only when the entire skill is genuinely required.
 
 ## Uploading Skills
 
-The MCP uploads every skill under `--skill-dir` when it starts. To run only the
-upload step and exit, use `--upload-only`:
+When `--skill-dir` is provided, the MCP uploads every skill under it when it
+starts. Omit `--skill-dir` to run search-only without uploading anything. To run
+only the upload step and exit, use `--upload-only` (which requires `--skill-dir`):
 
 ```bash
 uv run mead \
@@ -68,10 +76,10 @@ plus the node's current skill count.
 
 ## Preparing a Node for Search
 
-`--prepare-only` uploads the local skills, waits for the search oracle, asks the
-node to self-register, and exits without starting the MCP. It is the per-node
-counterpart to the `prepare-nodes` devnet bootstrap: the Lyquid must already be
-deployed with its constructor-staged committee.
+`--prepare-only` uploads the local skills when `--skill-dir` is provided, waits
+for the search oracle, asks the node to self-register, and exits without starting
+the MCP. It is the per-node counterpart to the `prepare-nodes` devnet bootstrap:
+the Lyquid must already be deployed with its constructor-staged committee.
 
 On a committee node (and only there), let the MCP drive activation:
 

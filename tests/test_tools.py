@@ -1,10 +1,16 @@
 from typing import Any, cast
 
 import pytest
+from mcp.types import EmbeddedResource, TextContent, TextResourceContents
 
 from mead.node_manager import NodeManager, SearchOutcome, SkillSummary
 from mead.skills import Skill
 from mead.tools import MeadTools
+
+
+def _embedded_text(block: EmbeddedResource) -> str:
+    assert isinstance(block.resource, TextResourceContents)
+    return block.resource.text
 
 
 class FakeNodeManager:
@@ -97,20 +103,38 @@ def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:
     tools = MeadTools(cast(NodeManager, fake))
 
     skill_md = tools.mcp_get_skill("digest-demo")
-    assert "# demo" in skill_md
-    assert "A demo skill" in skill_md
-    assert "Use this skill." in skill_md
-    assert "## Resource: a.txt" not in skill_md
-    assert "## Resource: nested/b.txt" not in skill_md
-    assert "- a.txt" in skill_md
+    summary = next(block for block in skill_md if isinstance(block, TextContent))
+    assert "Skill: demo" in summary.text
+    assert "Description: A demo skill" in summary.text
+    assert "- a.txt" in summary.text
+    assert "- nested/b.txt" in summary.text
+    embedded = [block for block in skill_md if isinstance(block, EmbeddedResource)]
+    assert len(embedded) == 1
+    assert embedded[0].resource.uri == "skill://digest-demo/SKILL.md"
+    assert _embedded_text(embedded[0]) == "Use this skill."
 
     selected = tools.mcp_get_skill("digest-demo", paths=["nested/b.txt"])
-    assert "## Resource: nested/b.txt\n\nB" in selected
-    assert "## Resource: a.txt" not in selected
+    selected_embedded = [
+        block for block in selected if isinstance(block, EmbeddedResource)
+    ]
+    assert [block.resource.uri for block in selected_embedded] == [
+        "skill://digest-demo/SKILL.md",
+        "skill://digest-demo/nested/b.txt",
+    ]
+    assert _embedded_text(selected_embedded[1]) == "B"
 
     full = tools.mcp_get_skill("digest-demo", "full")
-    assert "## Resource: a.txt\n\nA" in full
-    assert "## Resource: nested/b.txt\n\nB" in full
+    full_embedded = [block for block in full if isinstance(block, EmbeddedResource)]
+    assert [block.resource.uri for block in full_embedded] == [
+        "skill://digest-demo/SKILL.md",
+        "skill://digest-demo/a.txt",
+        "skill://digest-demo/nested/b.txt",
+    ]
+    assert [_embedded_text(block) for block in full_embedded] == [
+        "Use this skill.",
+        "A",
+        "B",
+    ]
     assert fake.get_calls == ["digest-demo", "digest-demo", "digest-demo"]
 
 

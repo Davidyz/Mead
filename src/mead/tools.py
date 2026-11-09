@@ -106,6 +106,10 @@ class MeadTools:
 
         These are summaries only. To read a skill, call ``get_skill`` with just
         its digest first, then request only the resources you actually need.
+
+        Run searches one at a time. A search fans out to the network and can take
+        a while to complete, because mead runs on a peer-to-peer network, so avoid
+        issuing multiple ``search_skills`` calls concurrently.
         """
         outcome = self._node_manager.search_skills(query, top_k=top_k)
         return {

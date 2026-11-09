@@ -19,6 +19,8 @@ This performs the full local devnet preparation:
    directory, activate the constructor-staged search oracle on the first node,
    self-register the node, and wait until the shared ``NodeRegistry`` contains
    it.
+6. Write the Lyquid and first-node IDs to the repository-root ``.env`` so the
+   MCP can start without repeating ``--node-id``/``--lyquid-id``.
 
 Running this script is the full devnet bootstrap; no separate setup-search step
 is required.
@@ -53,6 +55,7 @@ from mead.skills import Skill
 from mead.utils import CLIArgs
 
 ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = ROOT / ".env"
 SKILLS_DIR = ROOT / "tests" / "skills" / "skills"
 FIXTURE_DIR = ROOT / "tests" / "fixture"
 
@@ -467,6 +470,17 @@ def write_nodes_json(
     return path
 
 
+def write_env_file(node: Node, lyquid_id: str) -> Path:
+    """Write the IDs used by the local MCP to the repository-root `.env`."""
+
+    ENV_FILE.write_text(
+        f"MEAD_LYQUID_ID={lyquid_id}\nMEAD_NODE_ID={node.node_id}\n",
+        encoding="utf-8",
+    )
+    print(f"Wrote {ENV_FILE.relative_to(ROOT)} for node{node.index}.")
+    return ENV_FILE
+
+
 def prepare_node(
     node: Node, fixture_dir: Path, lyquid_id: str, *, activate: bool
 ) -> None:
@@ -646,6 +660,7 @@ def main() -> None:
     for node in nodes[1:]:
         prepare_node(node, fixture_dirs[node.index], lyquid_id, activate=False)
 
+    write_env_file(nodes[0], lyquid_id)
     deployed_skills = collect_deployed_skills(nodes, lyquid_id)
     print_deployed_skills(nodes, deployed_skills)
 

@@ -3,6 +3,7 @@ import logging
 import sys
 
 import httpx
+from dotenv import load_dotenv
 
 from .node_manager import NodeManager
 from .skills import SkillManager
@@ -13,6 +14,7 @@ logger = logging.getLogger(name=__name__)
 
 
 async def main_coro() -> None:
+    load_dotenv()
     cli_args = parse_args()
 
     node_manager = NodeManager(cli_args)

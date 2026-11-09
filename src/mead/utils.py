@@ -1,3 +1,4 @@
+import os
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,14 +66,24 @@ def arg_parser() -> ArgumentParser:
         help="Seconds between status/registry polls in --prepare-only mode.",
     )
 
-    parser.add_argument("--node-id", required=True, help="ID of the lyquid node.")
-    parser.add_argument("--lyquid-id", required=True, help="Lyquid ID to use.")
+    parser.add_argument(
+        "--node-id", help="ID of the lyquid node (default: $MEAD_NODE_ID)."
+    )
+    parser.add_argument(
+        "--lyquid-id", help="Lyquid ID to use (default: $MEAD_LYQUID_ID)."
+    )
     return parser
 
 
 def parse_args(args: list[str] | None = None) -> CLIArgs:
     parser = arg_parser()
     parsed = parser.parse_args(args)
+    node_id = parsed.node_id or os.environ.get("MEAD_NODE_ID")
+    lyquid_id = parsed.lyquid_id or os.environ.get("MEAD_LYQUID_ID")
+    if not node_id:
+        parser.error("--node-id or MEAD_NODE_ID environment variable is required")
+    if not lyquid_id:
+        parser.error("--lyquid-id or MEAD_LYQUID_ID environment variable is required")
     if parsed.activate_oracle and not parsed.prepare_only:
         parser.error("--activate-oracle requires --prepare-only")
     if parsed.wait_timeout <= 0:
@@ -87,6 +98,6 @@ def parse_args(args: list[str] | None = None) -> CLIArgs:
         activate_oracle=parsed.activate_oracle,
         wait_timeout=parsed.wait_timeout,
         poll_interval=parsed.poll_interval,
-        lyquid_id=parsed.lyquid_id,
-        node_id=parsed.node_id,
+        lyquid_id=lyquid_id,
+        node_id=node_id,
     )

@@ -32,6 +32,9 @@ For example, in pi-agent, use the following:
 }
 ```
 
+`--node-id` and `--lyquid-id` can be omitted when `MEAD_NODE_ID` and
+`MEAD_LYQUID_ID` are set in the environment.
+
 ## MCP Tools
 
 - `list_skill` — lists the local node's skills with name, description, and digest.

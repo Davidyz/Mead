@@ -43,13 +43,6 @@ def _devnet() -> dict[str, Any]:
     return data
 
 
-@pytest.mark.xfail(
-    reason=(
-        "two searches issued together from one node can leave one query pending; "
-        "tracked in #29"
-    ),
-    strict=False,
-)
 def test_concurrent_mcp_searches_on_the_same_node_complete() -> None:
     """Two MCP search tool calls issued together must both complete.
 

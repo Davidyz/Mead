@@ -18,8 +18,6 @@ For example, in pi-agent, use the following:
         "--from",
         "git+https://github.com/Davidyz/Mead.git",
         "mead",
-        "--skill-dir",
-        "<SKILL_DIR>",
         "--node-id",
         "<NODE_ID>",
         "--lyquid-id",
@@ -32,9 +30,12 @@ For example, in pi-agent, use the following:
 }
 ```
 
+This example is search-only: it does not pass `--skill-dir`, so the server does
+not upload any local skills. To contribute skills, add `"--skill-dir"` and
+`"<SKILL_DIR>"` to `args`.
+
 `--node-id` and `--lyquid-id` can be omitted when `MEAD_NODE_ID` and
-`MEAD_LYQUID_ID` are set in the environment. `--skill-dir` is optional: omit it
-to run a search-only server that does not contribute any local skills.
+`MEAD_LYQUID_ID` are set in the environment.
 
 ## MCP Tools
 

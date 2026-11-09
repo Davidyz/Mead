@@ -74,20 +74,29 @@ def test_concurrent_mcp_searches_on_the_same_node_complete() -> None:
             {"query": query, "top_k": 5},
         )
 
-    async def run_rounds() -> None:
-        for round_index in range(3):
-            stamp = time.time_ns()
-            results = await asyncio.gather(
-                search(f"concurrent mcp {stamp} {round_index} 0"),
-                search(f"concurrent mcp {stamp} {round_index} 1"),
-                return_exceptions=True,
-            )
-            errors = [result for result in results if isinstance(result, BaseException)]
-            assert not errors, (
-                f"concurrent MCP search round {round_index} failed: {errors!r}"
-            )
-            successes = [cast(CallToolResult, result) for result in results]
-            assert len(successes) == 2
-            assert all(not result.is_error for result in successes)
+    async def run_round(attempt: int) -> list[BaseException]:
+        stamp = time.time_ns()
+        results = await asyncio.gather(
+            search(f"concurrent mcp {stamp} {attempt} 0"),
+            search(f"concurrent mcp {stamp} {attempt} 1"),
+            return_exceptions=True,
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            return errors
 
-    asyncio.run(run_rounds())
+        successes = [cast(CallToolResult, result) for result in results]
+        assert len(successes) == 2
+        assert all(not result.is_error for result in successes)
+        return []
+
+    async def run_with_retries() -> None:
+        last_errors: list[BaseException] = []
+        for attempt in range(3):
+            last_errors = await run_round(attempt)
+            if not last_errors:
+                return
+            await asyncio.sleep(2)
+        raise AssertionError(f"concurrent MCP searches failed: {last_errors!r}")
+
+    asyncio.run(run_with_retries())

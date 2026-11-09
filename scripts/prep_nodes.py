@@ -474,7 +474,7 @@ def write_env_file(node: Node, lyquid_id: str) -> Path:
     """Write the IDs used by the local MCP to the repository-root `.env`."""
 
     ENV_FILE.write_text(
-        f"LYQUID_ID={lyquid_id}\nNODE_ID={node.node_id}\n",
+        f"MEAD_LYQUID_ID={lyquid_id}\nMEAD_NODE_ID={node.node_id}\n",
         encoding="utf-8",
     )
     print(f"Wrote {ENV_FILE.relative_to(ROOT)} for node{node.index}.")

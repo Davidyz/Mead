@@ -66,20 +66,24 @@ def arg_parser() -> ArgumentParser:
         help="Seconds between status/registry polls in --prepare-only mode.",
     )
 
-    parser.add_argument("--node-id", help="ID of the lyquid node (default: $NODE_ID).")
-    parser.add_argument("--lyquid-id", help="Lyquid ID to use (default: $LYQUID_ID).")
+    parser.add_argument(
+        "--node-id", help="ID of the lyquid node (default: $MEAD_NODE_ID)."
+    )
+    parser.add_argument(
+        "--lyquid-id", help="Lyquid ID to use (default: $MEAD_LYQUID_ID)."
+    )
     return parser
 
 
 def parse_args(args: list[str] | None = None) -> CLIArgs:
     parser = arg_parser()
     parsed = parser.parse_args(args)
-    node_id = parsed.node_id or os.environ.get("NODE_ID")
-    lyquid_id = parsed.lyquid_id or os.environ.get("LYQUID_ID")
+    node_id = parsed.node_id or os.environ.get("MEAD_NODE_ID")
+    lyquid_id = parsed.lyquid_id or os.environ.get("MEAD_LYQUID_ID")
     if not node_id:
-        parser.error("--node-id or NODE_ID environment variable is required")
+        parser.error("--node-id or MEAD_NODE_ID environment variable is required")
     if not lyquid_id:
-        parser.error("--lyquid-id or LYQUID_ID environment variable is required")
+        parser.error("--lyquid-id or MEAD_LYQUID_ID environment variable is required")
     if parsed.activate_oracle and not parsed.prepare_only:
         parser.error("--activate-oracle requires --prepare-only")
     if parsed.wait_timeout <= 0:

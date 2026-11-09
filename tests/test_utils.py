@@ -7,8 +7,8 @@ from mead.utils import parse_args
 
 @pytest.fixture(autouse=True)
 def clear_id_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NODE_ID", raising=False)
-    monkeypatch.delenv("LYQUID_ID", raising=False)
+    monkeypatch.delenv("MEAD_NODE_ID", raising=False)
+    monkeypatch.delenv("MEAD_LYQUID_ID", raising=False)
 
 
 def _base_args(*extra: str) -> list[str]:
@@ -26,8 +26,8 @@ def _base_args(*extra: str) -> list[str]:
 
 
 def test_ids_fall_back_to_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NODE_ID", "Node-from-env")
-    monkeypatch.setenv("LYQUID_ID", "Lyquid-from-env")
+    monkeypatch.setenv("MEAD_NODE_ID", "Node-from-env")
+    monkeypatch.setenv("MEAD_LYQUID_ID", "Lyquid-from-env")
 
     args = parse_args(["--skill-dir", "tests/fixture/node1"])
 
@@ -36,8 +36,8 @@ def test_ids_fall_back_to_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_explicit_ids_override_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NODE_ID", "Node-from-env")
-    monkeypatch.setenv("LYQUID_ID", "Lyquid-from-env")
+    monkeypatch.setenv("MEAD_NODE_ID", "Node-from-env")
+    monkeypatch.setenv("MEAD_LYQUID_ID", "Lyquid-from-env")
 
     args = parse_args(
         [

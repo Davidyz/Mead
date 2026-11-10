@@ -44,9 +44,7 @@ def _render_skill(
     resources: dict[str, SkillResource] = {
         resource.path: resource for resource in skill.resources
     }
-    resources["SKILL.md"] = SkillResource(
-        path="SKILL.md", contents=skill.instructions
-    )
+    resources["SKILL.md"] = SkillResource(path="SKILL.md", contents=skill.instructions)
     selected = list(dict.fromkeys(paths)) if paths is not None else ["SKILL.md"]
 
     missing = [path for path in selected if path not in resources]
@@ -86,7 +84,7 @@ class MeadTools:
     def __init__(self, node_manager: NodeManager):
         self._node_manager = node_manager
 
-    def mcp_search_skills(self, query: str, top_k: int = 5) -> dict[str, Any]:
+    def mcp_search_skills(self, query: str, top_k: int = 3) -> dict[str, Any]:
         """Search the network for skills using a lexical BM25 query.
 
         Matching is exact-token based: the query and each skill are lowercased,

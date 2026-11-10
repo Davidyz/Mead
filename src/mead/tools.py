@@ -2,16 +2,15 @@
 
 import mimetypes
 from collections.abc import Iterable
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import quote
 
 from mcp.types import EmbeddedResource, TextContent, TextResourceContents
 lazy from mcp.server import MCPServer
 
 from .node_manager import NodeManager, SkillSummary
-from .skills import Skill
+from .skills import Skill, SkillResource
 
-type SkillDetail = Literal["skill_md", "full"]
 type SkillContent = TextContent | EmbeddedResource
 
 
@@ -40,19 +39,15 @@ def _resource(
 def _render_skill(
     digest: str,
     skill: Skill,
-    detail: SkillDetail,
     paths: Iterable[str] | None,
 ) -> list[SkillContent]:
-    if detail not in ("skill_md", "full"):
-        raise ValueError(f"unsupported detail level: {detail}")
-
-    resources = {resource.path: resource for resource in skill.resources}
-    if paths is not None:
-        selected = list(dict.fromkeys(paths))
-    elif detail == "full":
-        selected = sorted(resources)
-    else:
-        selected = []
+    resources: dict[str, SkillResource] = {
+        resource.path: resource for resource in skill.resources
+    }
+    resources["SKILL.md"] = SkillResource(
+        path="SKILL.md", contents=skill.instructions
+    )
+    selected = list(dict.fromkeys(paths)) if paths is not None else ["SKILL.md"]
 
     missing = [path for path in selected if path not in resources]
     if missing:
@@ -65,13 +60,13 @@ def _render_skill(
         f"Description: {skill.description}",
         f"Digest: {digest}",
     ]
-    if resources:
+    actual_resources = {resource.path: resource for resource in skill.resources}
+    if actual_resources:
         summary.append("Available resources:")
-        summary.extend(f"- {path}" for path in sorted(resources))
+        summary.extend(f"- {path}" for path in sorted(actual_resources))
 
     blocks: list[SkillContent] = [
         TextContent(type="text", text="\n".join(summary)),
-        _resource(digest, "SKILL.md", skill.instructions, "text/markdown"),
     ]
     for path in selected:
         blocks.append(
@@ -125,29 +120,29 @@ class MeadTools:
     def mcp_get_skill(
         self,
         digest: str,
-        detail: SkillDetail = "skill_md",
         paths: Iterable[str] | None = None,
     ) -> list[SkillContent]:
-        """Return a skill by digest, starting with just its main body.
+        """Return a skill by digest.
 
-        Call this first with only ``digest`` (the default ``detail="skill_md"``).
-        That returns a text summary block plus an embedded ``SKILL.md`` resource,
-        without downloading any other resources. The summary lists the available
+        Returns a text summary block plus embedded resource files. The
+        ``paths`` parameter defaults to ``["SKILL.md"]``, so calling with just
+        ``digest`` fetches the main skill body. The summary lists all available
         resource paths.
 
-        Inspect that list, then call again with ``paths=[...]`` to fetch only the
-        resources you actually need. Do not use ``detail="full"`` unless you
-        genuinely need every resource: full skill bodies can be very large.
+        The first call for any skill should always be with just ``digest`` to
+        fetch ``SKILL.md``. Inspect the summary, then call again with
+        ``paths=[...]`` to fetch specific files. You can omit ``SKILL.md`` from
+        ``paths`` on subsequent calls since the agent already has it from the
+        initial fetch.
 
-        Each returned file is a separate MCP embedded resource with its own URI,
-        so the skill's Markdown is not wrapped or concatenated with synthetic
-        headings. ``detail="full"`` includes every resource; an explicit
-        ``paths`` list includes those resources regardless of ``detail``.
+        Any file assets referenced by the skill or by other tools in the Mead
+        MCP must be fetched via this tool using ``paths``, not via external
+        file I/O. The returned resources come with URIs of the form
+        ``skill://<digest>/<path>`` for use with MCP embedded resources.
         """
         return _render_skill(
             digest,
             self._node_manager.get_skill(digest),
-            detail,
             paths,
         )
 

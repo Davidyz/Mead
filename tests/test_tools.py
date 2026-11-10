@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from mcp.types import EmbeddedResource, TextContent, TextResourceContents
@@ -113,17 +113,21 @@ def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:
     assert embedded[0].resource.uri == "skill://digest-demo/SKILL.md"
     assert _embedded_text(embedded[0]) == "Use this skill."
 
+    # paths=[...] fetches only the requested files, without SKILL.md
     selected = tools.mcp_get_skill("digest-demo", paths=["nested/b.txt"])
     selected_embedded = [
         block for block in selected if isinstance(block, EmbeddedResource)
     ]
     assert [block.resource.uri for block in selected_embedded] == [
-        "skill://digest-demo/SKILL.md",
         "skill://digest-demo/nested/b.txt",
     ]
-    assert _embedded_text(selected_embedded[1]) == "B"
+    assert _embedded_text(selected_embedded[0]) == "B"
 
-    full = tools.mcp_get_skill("digest-demo", "full")
+    # fetching all resources via explicit paths
+    full = tools.mcp_get_skill(
+        "digest-demo",
+        paths=["SKILL.md", "a.txt", "nested/b.txt"],
+    )
     full_embedded = [block for block in full if isinstance(block, EmbeddedResource)]
     assert [block.resource.uri for block in full_embedded] == [
         "skill://digest-demo/SKILL.md",
@@ -138,7 +142,7 @@ def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:
     assert fake.get_calls == ["digest-demo", "digest-demo", "digest-demo"]
 
 
-def test_mcp_get_skill_rejects_unknown_resources_and_detail_levels() -> None:
+def test_mcp_get_skill_rejects_unknown_resources() -> None:
     skill = Skill.from_manifest(
         {"name": "demo", "description": "A demo skill"},
         "Body",
@@ -147,6 +151,4 @@ def test_mcp_get_skill_rejects_unknown_resources_and_detail_levels() -> None:
     tools = MeadTools(cast(NodeManager, FakeNodeManager([], {"digest-demo": skill})))
 
     with pytest.raises(ValueError, match="does not contain resources: missing.txt"):
-        tools.mcp_get_skill("digest-demo", "skill_md", ["missing.txt"])
-    with pytest.raises(ValueError, match="unsupported detail level"):
-        tools.mcp_get_skill("digest-demo", cast(Any, "summary"))
+        tools.mcp_get_skill("digest-demo", paths=["missing.txt"])

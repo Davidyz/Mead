@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -259,6 +260,7 @@ class NodeManager:
         self._server_url = cli_args.server_url.rstrip("/")
         self._host = _virtual_host(cli_args.lyquid_id, cli_args.node_id)
         self._node_id = _canonical_node_id(cli_args.node_id)
+        self._search_lock = threading.Lock()
 
     def _headers(self, *, content_type: str | None = None) -> dict[str, str]:
         headers = {"accept": "application/json"}
@@ -366,9 +368,30 @@ class NodeManager:
         timeout: float = 60.0,
         poll_interval: float = 1.0,
     ) -> SearchOutcome:
-        """Run a search and return its skills plus partial-result metadata."""
+        """Run a search and return its skills plus partial-result metadata.
+
+        Searches are serialized per node. The Lyquid search path cannot handle
+        two in-flight queries from the same node reliably, so a second call
+        waits for the first to finish instead of racing it.
+        """
 
         _validate_wait(timeout, poll_interval)
+        with self._search_lock:
+            return self._search_skills(
+                query,
+                top_k,
+                timeout=timeout,
+                poll_interval=poll_interval,
+            )
+
+    def _search_skills(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        timeout: float,
+        poll_interval: float,
+    ) -> SearchOutcome:
         query_id = self.start_search(query, top_k)
         deadline = time.monotonic() + timeout
         last_error = "query is not registered"

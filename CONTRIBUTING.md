@@ -34,10 +34,15 @@ Use `--node-id` and `--lyquid-id` flags (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID
 
 ## Preparing a Node for Search
 
-`--prepare-only` uploads local skills (when `--skill-dir` is provided), waits for
-the search oracle, self-registers the node, and exits without starting the MCP.
-It is the per-node counterpart to the `prepare-nodes` devnet bootstrap: the
-Lyquid must already be deployed with its constructor-staged committee.
+Every node must be registered in the shared node registry before it can
+participate in network searches — the search query mechanism discovers peers
+from this registry. A "search-only" node is one that contributes no skills
+(`/skills/count` returns 0) but can still query and receive results.
+
+`--prepare-only` uploads local skills (when `--skill-dir` is provided), waits
+for the search oracle, self-registers the node, and exits without starting the
+MCP. It is the per-node counterpart to the `prepare-nodes` devnet bootstrap:
+the Lyquid must already be deployed with its constructor-staged committee.
 
 On a committee node (and only there), let the MCP drive activation:
 

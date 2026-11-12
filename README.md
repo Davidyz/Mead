@@ -28,7 +28,7 @@ Add it to your agent's MCP configuration:
 }
 ```
 
-Omit `--node-id` and `--lyquid-id` (or their env vars `MEAD_NODE_ID` / `MEAD_LYQUID_ID`) for public nodes.
+Pass `--node-id` and `--lyquid-id` (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID` env vars) to connect to a specific node.
 Add `--skill-dir <SKILL_DIR>` to upload local skills alongside search.
 
 ## MCP Tools

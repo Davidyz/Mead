@@ -1,5 +1,9 @@
 # Mead
 
+Mead is a decentralized skill network for AI agents. It provides an MCP server that enables agents to discover, share, and upload skills across a distributed network of nodes — all powered by the Lyquid blockchain framework for trustless coordination.
+
+With Mead, AI agents can search a global skill catalog, retrieve reusable capabilities, and contribute their own skills back to the network, creating a living ecosystem of agent knowledge.
+
 ## MCP Configuration
 
 After installing [uv](https://docs.astral.sh/uv/), the stdio MCP server can be started with the following command:

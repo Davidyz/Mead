@@ -2,6 +2,83 @@
 
 - [uv](https://docs.astral.sh/uv/) is required for managing the Python environment and running project commands such as `uv run`.
 
+## Running the Local MCP for Debugging
+
+For debugging and experimenting, you can run the MCP server directly from the local source instead of pulling it from the remote repository. Add a configuration like the following to your agent's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "mead": {
+      "command": "uv",
+      "args": [
+        "run",
+        "mead",
+        "--server-url",
+        "http://127.0.0.1:10087",
+        "--skill-dir",
+        "/path/to/Mead/tests/fixture/node1"
+      ],
+      "timeout": 120
+    }
+  }
+}
+```
+
+Key differences from the production setup:
+- Uses `uv run mead` (local source) instead of `uvx --from git+...` (remote package)
+- Passes `--skill-dir` to upload local skill fixtures for testing
+- `--server-url` points to your local devnet node
+
+Use `--node-id` and `--lyquid-id` flags (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID` env vars) if your node requires authentication.
+
+## Preparing a Node for Search
+
+Every node must be registered in the shared node registry before it can
+participate in network searches — the search query mechanism discovers peers
+from this registry. A "search-only" node is one that contributes no skills
+(`/skills/count` returns 0) but can still query and receive results.
+
+`--prepare-only` uploads local skills (when `--skill-dir` is provided), waits
+for the search oracle, self-registers the node, and exits without starting the
+MCP. It is the per-node counterpart to the `prepare-nodes` devnet bootstrap:
+the Lyquid must already be deployed with its constructor-staged committee.
+
+On a committee node (and only there), let the MCP drive activation:
+
+```bash
+uv run mead \
+  --prepare-only \
+  --activate-oracle \
+  --server-url http://127.0.0.1:10087 \
+  --skill-dir /path/to/skills \
+  --node-id '<NODE_ID>' \
+  --lyquid-id '<LYQUID_ID>'
+```
+
+On every other node, omit `--activate-oracle`; the command waits for the oracle
+to become active, then self-registers:
+
+```bash
+uv run mead \
+  --prepare-only \
+  --server-url http://127.0.0.1:11087 \
+  --skill-dir /path/to/skills \
+  --node-id '<NODE_ID>' \
+  --lyquid-id '<LYQUID_ID>'
+```
+
+Useful flags:
+
+- `--wait-timeout` (default `120`): seconds to wait for oracle activation and,
+  separately, for the `NodeRegistry` to include the node.
+- `--poll-interval` (default `1.0`): seconds between status checks.
+
+The command is idempotent and safe to rerun: an active oracle and a registered
+node return immediately. It exits `0` when the node is ready, and non-zero with
+the last HTTP error/timeout otherwise. `--upload-only` and `--prepare-only` are
+mutually exclusive; `--activate-oracle` requires `--prepare-only`.
+
 # Testing
 
 The standard way to run tests for Lyquid is `shaker test Cargo.toml`.

@@ -38,8 +38,8 @@ Add `--skill-dir <SKILL_DIR>` to upload local skills alongside search.
 
 ## Uploading Skills
 
-Pass `--skill-dir <DIR>` to upload every skill in that directory when the MCP
-starts, then keep the server running for both search and uploads.
+Pass `--skill-dir <DIR>` to upload every skill in that directory once at
+startup. The MCP server then runs for both search and skill retrieval.
 Omit `--skill-dir` to run search-only.
 
 To upload skills once and exit (without starting the MCP server), add

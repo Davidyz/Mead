@@ -56,3 +56,32 @@ uv run mead \
 
 Display prefixes (`Lyquid-`, `Node-`) are optional in node IDs. The command
 prints how many skills were uploaded and the node's current total.
+
+## Preparing Your Node
+
+Before the MCP can participate in network searches, the node must be registered
+in the shared node registry. Run `--prepare-only` to upload skills, wait for
+the search oracle to become active, and self-register:
+
+```bash
+uv run mead \
+  --prepare-only \
+  --server-url http://127.0.0.1:10087 \
+  --skill-dir /path/to/skills \
+  --node-id '<NODE_ID>' \
+  --lyquid-id '<LYQUID_ID>'
+```
+
+If this is the first committee node in your network, also pass `--activate-oracle`
+to activate the search oracle. All other nodes omit this flag and wait for the
+oracle to activate automatically.
+
+Useful flags:
+
+- `--wait-timeout` (default `120`): seconds to wait for oracle activation and
+  node registration.
+- `--poll-interval` (default `1.0`): seconds between status checks.
+
+The command is idempotent — safe to rerun. It exits `0` when the node is ready,
+and non-zero on timeout or HTTP error. `--prepare-only` and `--upload-only` are
+mutually exclusive.

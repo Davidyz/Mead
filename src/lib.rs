@@ -331,12 +331,12 @@ fn unregister_node(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
     Ok(())
 }
 
-// Posts a token bond for a node through a certified oracle call.
+// Posts a token bond for a node.
 //
-// The node's local `/bonds/post` endpoint supplies its own `ctx.node_id`; the
-// transfer pulls tokens from the node's account into Mead, which acts as the
-// bond treasury. The node must approve Mead on the token first.
-#[method::network(group = oracle::certified::search)]
+// The node's account calls this directly; `ctx.caller` must be the account
+// registered for `node`. The transfer pulls tokens from that account into Mead,
+// which acts as the bond treasury. The node must approve Mead on the token first.
+#[method::network]
 fn post_bond(ctx: &mut _, node: NodeID, amount: U256) -> LyquidResult<()> {
     if node.0 == [0u8; 32] {
         return Err(invalid_input("node must not be zero"));
@@ -345,8 +345,12 @@ fn post_bond(ctx: &mut _, node: NodeID, amount: U256) -> LyquidResult<()> {
         return Err(invalid_input("bond amount must be greater than zero"));
     }
 
-    let token = bond_token(*ctx.network.token_lyquid_id)?;
     let account = bond_account(node)?;
+    if ctx.caller != account {
+        return Err(invalid_input("caller is not the node account"));
+    }
+
+    let token = bond_token(*ctx.network.token_lyquid_id)?;
     let treasury = Address::from(ctx.lyquid_id);
     safe_transfer_from(token, account, treasury, amount)?;
 
@@ -354,16 +358,22 @@ fn post_bond(ctx: &mut _, node: NodeID, amount: U256) -> LyquidResult<()> {
     ctx.network.bonds.post(node, amount, posted_at)
 }
 
-// Withdraws a node's remaining bond through a certified oracle call.
-#[method::network(group = oracle::certified::search)]
+// Withdraws a node's remaining bond.
+//
+// The node's account calls this directly; the refund is sent to that account.
+#[method::network]
 fn withdraw_bond(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
     let amount = ctx.network.bonds.amount(node);
     if amount.is_zero() {
         return Ok(());
     }
 
-    let token = bond_token(*ctx.network.token_lyquid_id)?;
     let account = bond_account(node)?;
+    if ctx.caller != account {
+        return Err(invalid_input("caller is not the node account"));
+    }
+
+    let token = bond_token(*ctx.network.token_lyquid_id)?;
     safe_transfer(token, account, amount)?;
     ctx.network.bonds.withdraw(node);
     Ok(())
@@ -548,160 +558,6 @@ fn list_registered_nodes(ctx: &_, _req: http::Request) -> LyquidResult<http::Res
     nodes.sort_by_key(|node| node.0);
     let nodes: Vec<String> = nodes.into_iter().map(|node| node.to_string()).collect();
     let body = serde_json::json!({ "nodes": nodes }).to_string();
-    Ok(http_json_response(200, &body))
-}
-
-#[derive(serde::Deserialize)]
-struct PostBondRequest {
-    amount: String,
-}
-
-fn parse_bond_amount(value: &str) -> LyquidResult<U256> {
-    let value = value.trim();
-    let (digits, radix) = match value.strip_prefix("0x") {
-        Some(hex) => (hex, 16),
-        None => (value, 10),
-    };
-    U256::from_str_radix(digits, radix)
-        .map_err(|_| invalid_input("bond amount must be a decimal or 0x-prefixed integer"))
-}
-
-fn submit_certified_bond_change(
-    ctx: &mut crate::__lyquid::InstanceContext,
-    method: &str,
-    input: Vec<u8>,
-) -> LyquidResult<http::Response> {
-    let target = OracleTarget {
-        seq_id: lyquor_api::sequence_backend_id()?,
-        target: OracleServiceTarget::LVM(ctx.lyquid_id),
-    };
-    let origin = Address::from(ctx.lyquid_id);
-    let oracle = ctx.network.search.clone();
-    let call = oracle.certify(
-        ctx,
-        CertifiedCallParams {
-            origin,
-            method: method.to_owned(),
-            input: input.into(),
-            target,
-        },
-        Bytes::new(),
-        None,
-        Some(UPC_ANNOUNCE_TIMEOUT_MS),
-    )?;
-
-    let Some(call) = call else {
-        return Ok(http_json_response(
-            503,
-            &json_error("bond certification is unavailable"),
-        ));
-    };
-
-    match submit_certified_call!(call) {
-        Ok(_) => {
-            let body = serde_json::json!({
-                "status": "submitted",
-                "method": method,
-            })
-            .to_string();
-            Ok(http_json_response(202, &body))
-        }
-        Err(error) => Ok(http_json_response(
-            502,
-            &json_error(&format!("failed to submit certified bond change: {error}")),
-        )),
-    }
-}
-
-// Posts a token bond for this node.
-//
-// `POST /bonds/post`
-//
-// Request body:
-// { "amount": "1000" }
-//
-// The amount is a decimal integer or a `0x`-prefixed hex integer. The node must
-// approve Mead on the bond token before posting. Requires an active search
-// oracle and a configured bond token.
-//
-// Response - `202 Accepted`:
-// { "status": "submitted", "method": "post_bond" }
-//
-// Errors:
-// - `400`: the amount is missing, empty, or invalid.
-// - `502`: submitting the certified call failed.
-// - `503`: bond certification is unavailable.
-#[method::instance(export = http, method = "POST", path_prefix = "/bonds/post")]
-fn post_bond_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
-    let Some(body) = req.body.as_deref() else {
-        return Ok(http_json_response(
-            400,
-            &json_error("request body is required"),
-        ));
-    };
-    let request: PostBondRequest = match serde_json::from_slice(body) {
-        Ok(request) => request,
-        Err(error) => {
-            return Ok(http_json_response(
-                400,
-                &json_error(&format!("invalid bond request JSON: {error}")),
-            ));
-        }
-    };
-    let amount = match parse_bond_amount(&request.amount) {
-        Ok(amount) => amount,
-        Err(error) => return Ok(http_json_response(400, &json_error(&error.to_string()))),
-    };
-    if amount.is_zero() {
-        return Ok(http_json_response(
-            400,
-            &json_error("bond amount must be greater than zero"),
-        ));
-    }
-
-    let node = ctx.node_id;
-    let input = encode_by_fields!(node: NodeID = node, amount: U256 = amount).into();
-    submit_certified_bond_change(&mut ctx, "post_bond", input)
-}
-
-// Withdraws this node's remaining bond.
-//
-// `POST /bonds/withdraw`
-//
-// Response - `202 Accepted`:
-// { "status": "submitted", "method": "withdraw_bond" }
-//
-// Errors:
-// - `502`: submitting the certified call failed.
-// - `503`: bond certification is unavailable.
-#[method::instance(export = http, method = "POST", path_prefix = "/bonds/withdraw")]
-fn withdraw_bond_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
-    let node = ctx.node_id;
-    let input = encode_by_fields!(node: NodeID = node).into();
-    submit_certified_bond_change(&mut ctx, "withdraw_bond", input)
-}
-
-// Reports this node's bond state.
-//
-// `GET /bonds/status`
-//
-// Response - `200 OK`:
-// { "node_id": "Node-...", "bond": "1000", "min_bond": "1000",
-//   "eligible": true, "token_lyquid_id": "Lyquid-..." }
-#[method::instance(export = http, method = "GET", path_prefix = "/bonds/status")]
-fn bond_status_endpoint(ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
-    let node = ctx.node_id;
-    let bond = ctx.network.bonds.amount(node);
-    let min_bond = *ctx.network.min_bond;
-    let token = *ctx.network.token_lyquid_id;
-    let body = serde_json::json!({
-        "node_id": node.to_string(),
-        "bond": bond.to_string(),
-        "min_bond": min_bond.to_string(),
-        "eligible": ctx.network.bonds.is_eligible(node, min_bond),
-        "token_lyquid_id": token.to_string(),
-    })
-    .to_string();
     Ok(http_json_response(200, &body))
 }
 
@@ -1219,17 +1075,11 @@ fn validate(
                 .query_registry
                 .is_expected_responder(&input.result.query_id, input.result.sender))
         }
-        "register_node" | "unregister_node" | "withdraw_bond" => {
+        "register_node" | "unregister_node" => {
             let Some(input) = decode_by_fields!(&params.input, node: NodeID) else {
                 return Ok(false);
             };
             Ok(input.node.0 != [0u8; 32])
-        }
-        "post_bond" => {
-            let Some(input) = decode_by_fields!(&params.input, node: NodeID, amount: U256) else {
-                return Ok(false);
-            };
-            Ok(input.node.0 != [0u8; 32] && !input.amount.is_zero())
         }
         "slash_bond" => {
             let Some(input) = decode_by_fields!(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.util
 from pathlib import Path
 
@@ -83,3 +84,25 @@ def test_assign_fixture_skills_rejects_skipping_every_node() -> None:
 
     with pytest.raises(RuntimeError, match="all nodes are skipped"):
         prep_nodes.assign_fixture_skills(nodes, _skills(19), {1, 2, 3, 4})
+
+
+def test_constructor_input_includes_bond_configuration() -> None:
+    node_id = "Node-" + base64.b32encode(bytes(range(32))).decode().lower().rstrip("=")
+    token = bytes.fromhex("11" * 20)
+
+    encoded = prep_nodes.encode_constructor_input([node_id], 1, token, 5)
+    data = bytes.fromhex(encoded.removeprefix("0x"))
+
+    assert int.from_bytes(data[0:32], "big") == 128
+    assert int.from_bytes(data[32:64], "big") == 1
+    assert data[64:96] == token.rjust(32, b"\x00")
+    assert int.from_bytes(data[96:128], "big") == 5
+    assert int.from_bytes(data[128:160], "big") == 1
+    assert len(data) == 128 + 32 + 32
+
+
+def test_parse_bond_token_accepts_a_20_byte_address() -> None:
+    assert prep_nodes.parse_bond_token("0x" + "11" * 20) == bytes.fromhex("11" * 20)
+
+    with pytest.raises(ValueError, match="20-byte"):
+        prep_nodes.parse_bond_token("0x1234")

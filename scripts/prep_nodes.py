@@ -80,6 +80,7 @@ NODE_ID_RE = re.compile(
 NODE_PORT_RE = re.compile(r":(?P<port>\d+)->10087/tcp")
 
 DEFAULT_ORACLE_THRESHOLD = 2
+DEFAULT_BOND_TOKEN = "0x" + "00" * 20
 NODE_ID_BYTES = 32
 DEFAULT_DEVNET_DIR = Path.home() / ".shakenup" / "ldk" / "docker" / "multi"
 DEFAULT_NODE_FUNDING_ETH = "10"
@@ -108,18 +109,44 @@ def node_id_public_key(node_id: str) -> bytes:
     return decoded[:NODE_ID_BYTES]
 
 
-def encode_constructor_input(committee: list[str], threshold: int) -> str:
-    """ABI-encode `(bytes32[] committee, uint16 threshold)` for `shaker deploy -i`."""
+def parse_bond_token(value: str) -> bytes:
+    """Parse a 20-byte Lyquid address used as the bond token."""
+    text = value.removeprefix("0x")
+    if len(text) != 40:
+        raise ValueError("bond token must be a 20-byte hex address")
+    try:
+        return bytes.fromhex(text)
+    except ValueError as error:
+        raise ValueError(f"invalid bond token: {error}") from error
+
+
+def encode_constructor_input(
+    committee: list[str],
+    threshold: int,
+    bond_token: bytes = bytes(20),
+    min_bond: int = 0,
+) -> str:
+    """ABI-encode `(bytes32[],uint16,address,uint256)` for `shaker deploy -i`."""
     if not committee:
         raise ValueError("oracle committee must not be empty")
     if not 0 < threshold <= len(committee):
         raise ValueError(
             f"threshold {threshold} must be between 1 and {len(committee)}"
         )
+    if len(bond_token) != 20:
+        raise ValueError("bond token must be 20 bytes")
+    if min_bond < 0:
+        raise ValueError("minimum bond must not be negative")
 
     keys = [node_id_public_key(node_id) for node_id in committee]
-    # Parameter head: offset to the dynamic array, then the uint16 threshold.
-    head = (64).to_bytes(32, "big") + threshold.to_bytes(32, "big")
+    # Parameter head: offset to the dynamic array, uint16 threshold, address
+    # token, and uint256 minimum bond. The dynamic array tail follows the head.
+    head = (
+        (128).to_bytes(32, "big")
+        + threshold.to_bytes(32, "big")
+        + bond_token.rjust(32, b"\x00")
+        + min_bond.to_bytes(32, "big")
+    )
     # Dynamic array tail: length followed by one 32-byte word per element.
     tail = len(keys).to_bytes(32, "big") + b"".join(keys)
     return "0x" + (head + tail).hex()
@@ -165,7 +192,11 @@ def parse_json_output(output: str) -> dict[str, object]:
 def deploy_lyquid(nodes: list[Node], threshold: int) -> str:
     reference = os.environ.get("LYQUID_REFERENCE", DEFAULT_LYQUID_REFERENCE)
     committee = [node.node_id for node in sorted(nodes, key=lambda node: node.index)]
-    constructor_input = encode_constructor_input(committee, threshold)
+    bond_token = parse_bond_token(os.environ.get("MEAD_BOND_TOKEN", DEFAULT_BOND_TOKEN))
+    min_bond = int(os.environ.get("MEAD_MIN_BOND", "0"))
+    constructor_input = encode_constructor_input(
+        committee, threshold, bond_token, min_bond
+    )
     print(f"Deploying Cargo.toml to {reference}...")
     print(f"Oracle committee ({threshold} of {len(committee)}):")
     for node in sorted(nodes, key=lambda node: node.index):

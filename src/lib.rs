@@ -26,12 +26,15 @@ use api::{http_json_response, json_error};
 use skill::{Skill, SkillError, SkillManager};
 use types::invalid_input;
 use types::{
-    Bm25Score, CanonicalBytes, NodeRegistry, QueryParams, QueryRegistry, ResultRegistry,
-    SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery, SearchResult,
+    BPS_DENOMINATOR, Bm25Score, BondRegistry, CanonicalBytes, NodeRegistry, QueryParams,
+    QueryRegistry, ResultRegistry, SEARCH_RESPONSE_DEADLINE_BLOCKS, SearchQuery, SearchResult,
 };
 
 /// Maximum time the initiating node waits for a UPC acknowledgement.
 const UPC_ANNOUNCE_TIMEOUT_MS: u64 = 10_000;
+
+/// Automatic slash applied to a signed result that fails on-chain validation.
+const SLASH_INVALID_RESULT_BPS: u16 = BPS_DENOMINATOR;
 
 mod bm25;
 
@@ -45,6 +48,11 @@ state! {
     network query_registry: QueryRegistry = QueryRegistry::default();
     network result_registry: ResultRegistry = ResultRegistry::default();
     network node_registry: NodeRegistry = NodeRegistry::default();
+    // Bond accounting for the peer penalty mechanism. The zero LyquidID means
+    // bonds are disabled; `min_bond` is then ignored.
+    network bonds: BondRegistry = BondRegistry::default();
+    network token_lyquid_id: LyquidID = LyquidID::default();
+    network min_bond: U256 = U256::ZERO;
     // Canonical skill bytes persisted in instance state so the in-memory
     // manager can be rebuilt after the Lyquid VM restarts.
     instance skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
@@ -64,7 +72,15 @@ state! {
 // The eth export is required for `shaker deploy -i` to expose the constructor
 // ABI and deliver the ABI-encoded committee and threshold.
 #[method::network(export = eth)]
-fn constructor(ctx: &mut _, committee: Vec<NodeID>, threshold: u16) {
+fn constructor(
+    ctx: &mut _,
+    committee: Vec<NodeID>,
+    threshold: u16,
+    token_lyquid_id: LyquidID,
+    min_bond: U256,
+) {
+    *ctx.network.token_lyquid_id = token_lyquid_id;
+    *ctx.network.min_bond = min_bond;
     if let Ok(seq_id) = lyquor_api::sequence_backend_id() {
         let target = OracleTarget {
             seq_id,
@@ -81,6 +97,50 @@ fn search_oracle_target(lyquid_id: LyquidID) -> LyquidResult<OracleTarget> {
         seq_id: lyquor_api::sequence_backend_id()?,
         target: OracleServiceTarget::LVM(lyquid_id),
     })
+}
+
+/// Returns the configured bond token or an error when bonds are disabled.
+fn bond_token(token: LyquidID) -> LyquidResult<LyquidID> {
+    if token == LyquidID::default() {
+        return Err(invalid_input("the bond token is not configured"));
+    }
+    Ok(token)
+}
+
+/// Resolves a node identity to its submitter address for token transfers.
+fn bond_account(node: NodeID) -> LyquidResult<Address> {
+    lyquor_api::get_address_by_ed25519(node.0)
+        .map_err(|error| LyquidError::LyquidRuntime(error.to_string()))?
+        .ok_or_else(|| invalid_input("the node has no associated account"))
+}
+
+fn safe_transfer_from(
+    token: LyquidID,
+    from: Address,
+    to: Address,
+    amount: U256,
+) -> LyquidResult<()> {
+    let success = call!(
+        (token).transferFrom(from: Address = from, to: Address = to, value: U256 = amount)
+            -> (success: LyquidResult<bool>)
+    )
+    .success?;
+    if !success {
+        return Err(invalid_input("bond token transferFrom failed"));
+    }
+    Ok(())
+}
+
+fn safe_transfer(token: LyquidID, to: Address, amount: U256) -> LyquidResult<()> {
+    let success = call!(
+        (token).transfer(to: Address = to, amount: U256 = amount)
+            -> (success: LyquidResult<bool>)
+    )
+    .success?;
+    if !success {
+        return Err(invalid_input("bond token transfer failed"));
+    }
+    Ok(())
 }
 
 /// Returns the search oracle's current destination epoch (0 when not active).
@@ -217,6 +277,15 @@ fn search_oracle_status(ctx: &_, _req: http::Request) -> LyquidResult<http::Resp
 // address-to-key mapping is involved. Registration is idempotent.
 #[method::network(group = oracle::certified::search)]
 fn register_node(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
+    // When bonds are enabled, a node must meet the minimum before it can serve
+    // searches. A zero token LyquidID keeps bonds disabled for existing
+    // deployments that have not deployed a token yet.
+    if *ctx.network.token_lyquid_id != LyquidID::default()
+        && !ctx.network.bonds.is_eligible(node, *ctx.network.min_bond)
+    {
+        return Err(invalid_input("node bond is below the minimum"));
+    }
+
     ctx.network.node_registry.register(node)?;
     Ok(())
 }
@@ -226,8 +295,102 @@ fn register_node(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
 // The node's local `/nodes/unregister` endpoint supplies its own `ctx.node_id`.
 #[method::network(group = oracle::certified::search)]
 fn unregister_node(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
-    if !ctx.network.node_registry.unregister(node) {
+    if !ctx.network.node_registry.contains(&node) {
         return Err(invalid_input("node is not registered"));
+    }
+
+    // Return any remaining bond before removing the node. Slashing removes the
+    // node directly instead of going through this path, so slashed funds stay
+    // in Mead's treasury.
+    let amount = ctx.network.bonds.amount(node);
+    if !amount.is_zero() {
+        let token = bond_token(*ctx.network.token_lyquid_id)?;
+        let account = bond_account(node)?;
+        safe_transfer(token, account, amount)?;
+        ctx.network.bonds.withdraw(node);
+    }
+
+    ctx.network.node_registry.unregister(node);
+    Ok(())
+}
+
+// Posts a token bond for a node through a certified oracle call.
+//
+// The node's local `/bonds/post` endpoint supplies its own `ctx.node_id`; the
+// transfer pulls tokens from the node's account into Mead, which acts as the
+// bond treasury. The node must approve Mead on the token first.
+#[method::network(group = oracle::certified::search)]
+fn post_bond(ctx: &mut _, node: NodeID, amount: U256) -> LyquidResult<()> {
+    if node.0 == [0u8; 32] {
+        return Err(invalid_input("node must not be zero"));
+    }
+    if amount.is_zero() {
+        return Err(invalid_input("bond amount must be greater than zero"));
+    }
+
+    let token = bond_token(*ctx.network.token_lyquid_id)?;
+    let account = bond_account(node)?;
+    let treasury = Address::from(ctx.lyquid_id);
+    safe_transfer_from(token, account, treasury, amount)?;
+
+    let posted_at = lyquor_api::systime()? / 1000;
+    ctx.network.bonds.post(node, amount, posted_at)
+}
+
+// Withdraws a node's remaining bond through a certified oracle call.
+#[method::network(group = oracle::certified::search)]
+fn withdraw_bond(ctx: &mut _, node: NodeID) -> LyquidResult<()> {
+    let amount = ctx.network.bonds.amount(node);
+    if amount.is_zero() {
+        return Ok(());
+    }
+
+    let token = bond_token(*ctx.network.token_lyquid_id)?;
+    let account = bond_account(node)?;
+    safe_transfer(token, account, amount)?;
+    ctx.network.bonds.withdraw(node);
+    Ok(())
+}
+
+// Slashes a node's bond for a signed but invalid search result.
+//
+// The oracle policy only certifies this call when `result` carries a valid
+// signature by `result.sender` and fails result validation, so a node cannot be
+// slashed for a valid result or for a result signed by someone else.
+#[method::network(group = oracle::certified::search)]
+fn slash_bond(ctx: &mut _, result: SearchResult, fraction_bps: u16) -> LyquidResult<()> {
+    if !verify::verify_signed(&result) {
+        return Err(invalid_input("slash evidence signature is invalid"));
+    }
+    if !ctx.network.node_registry.contains(&result.sender) {
+        return Err(invalid_input("slash target is not registered"));
+    }
+
+    let query = ctx
+        .network
+        .query_registry
+        .get(&result.query_id)
+        .cloned()
+        .ok_or_else(|| invalid_input("slash evidence query is not registered"))?;
+    if result.validate().is_ok() && result.validate_against(&query).is_ok() {
+        return Err(invalid_input("slash evidence is a valid result"));
+    }
+
+    let slashed = ctx.network.bonds.slash(result.sender, fraction_bps)?;
+    lyquid::println!(
+        "mead: slashed {slashed} from {} for query {}",
+        result.sender,
+        result.query_id
+    );
+
+    let remaining = ctx.network.bonds.amount(result.sender);
+    if remaining.is_zero()
+        || !ctx
+            .network
+            .bonds
+            .is_eligible(result.sender, *ctx.network.min_bond)
+    {
+        ctx.network.node_registry.unregister(result.sender);
     }
     Ok(())
 }
@@ -368,6 +531,160 @@ fn list_registered_nodes(ctx: &_, _req: http::Request) -> LyquidResult<http::Res
     nodes.sort_by_key(|node| node.0);
     let nodes: Vec<String> = nodes.into_iter().map(|node| node.to_string()).collect();
     let body = serde_json::json!({ "nodes": nodes }).to_string();
+    Ok(http_json_response(200, &body))
+}
+
+#[derive(serde::Deserialize)]
+struct PostBondRequest {
+    amount: String,
+}
+
+fn parse_bond_amount(value: &str) -> LyquidResult<U256> {
+    let value = value.trim();
+    let (digits, radix) = match value.strip_prefix("0x") {
+        Some(hex) => (hex, 16),
+        None => (value, 10),
+    };
+    U256::from_str_radix(digits, radix)
+        .map_err(|_| invalid_input("bond amount must be a decimal or 0x-prefixed integer"))
+}
+
+fn submit_certified_bond_change(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    method: &str,
+    input: Vec<u8>,
+) -> LyquidResult<http::Response> {
+    let target = OracleTarget {
+        seq_id: lyquor_api::sequence_backend_id()?,
+        target: OracleServiceTarget::LVM(ctx.lyquid_id),
+    };
+    let origin = Address::from(ctx.lyquid_id);
+    let oracle = ctx.network.search.clone();
+    let call = oracle.certify(
+        ctx,
+        CertifiedCallParams {
+            origin,
+            method: method.to_owned(),
+            input: input.into(),
+            target,
+        },
+        Bytes::new(),
+        None,
+        Some(UPC_ANNOUNCE_TIMEOUT_MS),
+    )?;
+
+    let Some(call) = call else {
+        return Ok(http_json_response(
+            503,
+            &json_error("bond certification is unavailable"),
+        ));
+    };
+
+    match submit_certified_call!(call) {
+        Ok(_) => {
+            let body = serde_json::json!({
+                "status": "submitted",
+                "method": method,
+            })
+            .to_string();
+            Ok(http_json_response(202, &body))
+        }
+        Err(error) => Ok(http_json_response(
+            502,
+            &json_error(&format!("failed to submit certified bond change: {error}")),
+        )),
+    }
+}
+
+// Posts a token bond for this node.
+//
+// `POST /bonds/post`
+//
+// Request body:
+// { "amount": "1000" }
+//
+// The amount is a decimal integer or a `0x`-prefixed hex integer. The node must
+// approve Mead on the bond token before posting. Requires an active search
+// oracle and a configured bond token.
+//
+// Response - `202 Accepted`:
+// { "status": "submitted", "method": "post_bond" }
+//
+// Errors:
+// - `400`: the amount is missing, empty, or invalid.
+// - `502`: submitting the certified call failed.
+// - `503`: bond certification is unavailable.
+#[method::instance(export = http, method = "POST", path_prefix = "/bonds/post")]
+fn post_bond_endpoint(ctx: &mut _, req: http::Request) -> LyquidResult<http::Response> {
+    let Some(body) = req.body.as_deref() else {
+        return Ok(http_json_response(
+            400,
+            &json_error("request body is required"),
+        ));
+    };
+    let request: PostBondRequest = match serde_json::from_slice(body) {
+        Ok(request) => request,
+        Err(error) => {
+            return Ok(http_json_response(
+                400,
+                &json_error(&format!("invalid bond request JSON: {error}")),
+            ));
+        }
+    };
+    let amount = match parse_bond_amount(&request.amount) {
+        Ok(amount) => amount,
+        Err(error) => return Ok(http_json_response(400, &json_error(&error.to_string()))),
+    };
+    if amount.is_zero() {
+        return Ok(http_json_response(
+            400,
+            &json_error("bond amount must be greater than zero"),
+        ));
+    }
+
+    let node = ctx.node_id;
+    let input = encode_by_fields!(node: NodeID = node, amount: U256 = amount).into();
+    submit_certified_bond_change(&mut ctx, "post_bond", input)
+}
+
+// Withdraws this node's remaining bond.
+//
+// `POST /bonds/withdraw`
+//
+// Response - `202 Accepted`:
+// { "status": "submitted", "method": "withdraw_bond" }
+//
+// Errors:
+// - `502`: submitting the certified call failed.
+// - `503`: bond certification is unavailable.
+#[method::instance(export = http, method = "POST", path_prefix = "/bonds/withdraw")]
+fn withdraw_bond_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<http::Response> {
+    let node = ctx.node_id;
+    let input = encode_by_fields!(node: NodeID = node).into();
+    submit_certified_bond_change(&mut ctx, "withdraw_bond", input)
+}
+
+// Reports this node's bond state.
+//
+// `GET /bonds/status`
+//
+// Response - `200 OK`:
+// { "node_id": "Node-...", "bond": "1000", "min_bond": "1000",
+//   "eligible": true, "token_lyquid_id": "Lyquid-..." }
+#[method::instance(export = http, method = "GET", path_prefix = "/bonds/status")]
+fn bond_status_endpoint(ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
+    let node = ctx.node_id;
+    let bond = ctx.network.bonds.amount(node);
+    let min_bond = *ctx.network.min_bond;
+    let token = *ctx.network.token_lyquid_id;
+    let body = serde_json::json!({
+        "node_id": node.to_string(),
+        "bond": bond.to_string(),
+        "min_bond": min_bond.to_string(),
+        "eligible": ctx.network.bonds.is_eligible(node, min_bond),
+        "token_lyquid_id": token.to_string(),
+    })
+    .to_string();
     Ok(http_json_response(200, &body))
 }
 
@@ -640,6 +957,42 @@ fn search_request(
     }
 }
 
+// Certifies and submits a slash for a signed-but-invalid peer result.
+fn submit_slash_impl(
+    ctx: &mut crate::__lyquid::InstanceContext,
+    result: &SearchResult,
+    fraction_bps: u16,
+) -> LyquidResult<()> {
+    let target = OracleTarget {
+        seq_id: lyquor_api::sequence_backend_id()?,
+        target: OracleServiceTarget::LVM(ctx.lyquid_id),
+    };
+    let origin = Address::from(ctx.lyquid_id);
+    let oracle = ctx.network.search.clone();
+    let call = oracle.certify(
+        ctx,
+        CertifiedCallParams {
+            origin,
+            method: "slash_bond".into(),
+            input: encode_by_fields!(
+                result: SearchResult = result.clone(),
+                fraction_bps: u16 = fraction_bps
+            )
+            .into(),
+            target,
+        },
+        Bytes::new(),
+        None,
+        Some(UPC_ANNOUNCE_TIMEOUT_MS),
+    )?;
+
+    let Some(call) = call else {
+        return Err(invalid_input("slash certification is unavailable"));
+    };
+    submit_certified_call!(call)?;
+    Ok(())
+}
+
 // Verifies a peer-signed result and submits it through the search oracle.
 //
 // The certificate is issued to this initiator, not the peer: it authorizes this
@@ -668,7 +1021,18 @@ fn submit_peer_result_impl(
         .get(&result.query_id)
         .cloned()
         .ok_or_else(|| invalid_input("query is not registered"))?;
-    result.validate_against(&query)?;
+    if let Err(error) = result.validate_against(&query) {
+        // The signature is valid, so a self-inconsistent or query-inconsistent
+        // result is attributable to the sender. Slash it before returning the
+        // original validation error.
+        if let Err(slash_error) = submit_slash_impl(ctx, &result, SLASH_INVALID_RESULT_BPS) {
+            lyquid::println!(
+                "mead: failed to slash {} for invalid result: {slash_error}",
+                result.sender
+            );
+        }
+        return Err(error);
+    }
     if skill_bodies.len() != result.matches.len() {
         return Err(invalid_input(
             "result does not include a body for every matched skill",
@@ -838,11 +1202,37 @@ fn validate(
                 .query_registry
                 .is_expected_responder(&input.result.query_id, input.result.sender))
         }
-        "register_node" | "unregister_node" => {
+        "register_node" | "unregister_node" | "withdraw_bond" => {
             let Some(input) = decode_by_fields!(&params.input, node: NodeID) else {
                 return Ok(false);
             };
             Ok(input.node.0 != [0u8; 32])
+        }
+        "post_bond" => {
+            let Some(input) = decode_by_fields!(&params.input, node: NodeID, amount: U256) else {
+                return Ok(false);
+            };
+            Ok(input.node.0 != [0u8; 32] && !input.amount.is_zero())
+        }
+        "slash_bond" => {
+            let Some(input) = decode_by_fields!(
+                &params.input,
+                result: SearchResult,
+                fraction_bps: u16
+            ) else {
+                return Ok(false);
+            };
+            if !verify::verify_signed(&input.result)
+                || input.fraction_bps == 0
+                || input.fraction_bps > BPS_DENOMINATOR
+                || !ctx.network.node_registry.contains(&input.result.sender)
+            {
+                return Ok(false);
+            }
+            let Some(query) = ctx.network.query_registry.get(&input.result.query_id) else {
+                return Ok(false);
+            };
+            Ok(input.result.validate().is_err() || input.result.validate_against(query).is_err())
         }
         _ => Ok(false),
     }

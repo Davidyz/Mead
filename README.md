@@ -72,9 +72,9 @@ uv run mead \
   --lyquid-id '<LYQUID_ID>'
 ```
 
-If this is the first committee node in your network, also pass `--activate-oracle`
-to activate the search oracle. All other nodes omit this flag and wait for the
-oracle to activate automatically.
+On one committee node, also pass `--activate-oracle` to activate the search
+oracle. All other nodes omit this flag and wait for the oracle to become active;
+they do not activate it themselves.
 
 Useful flags:
 

@@ -33,7 +33,7 @@ Add `--skill-dir <SKILL_DIR>` to upload local skills alongside search.
 
 ## MCP Tools
 
-- `search_skills(query, top_k=3)` - searches the network for skills using lexical BM25 matching. Returns skill summaries (name, description, digest) along with result counts and timeout status. For best results, include synonyms and related terms in your query; there is no stemming or synonym expansion. Run searches sequentially; concurrent calls may overwhelm the peer-to-peer network.
+- `search_skills(query, top_k=3)` - searches the network for skills using lexical BM25 matching. Returns skill summaries (name, description, digest) along with result counts and timeout status. For best results, include synonyms and related terms in your query; there is no stemming or synonym expansion. Searches are serialized per node, so a second search waits for the first to finish instead of racing it.
 - `get_skill(digest, paths=None)` - fetches a skill by digest. Defaults to returning `SKILL.md` and a summary listing all available resources. Pass `paths=["file.txt", "README.md"]` to retrieve specific files. Resources are delivered as MCP embedded resources at `skill://<digest>/<path>`.
 
 ## Uploading Skills

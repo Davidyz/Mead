@@ -30,7 +30,7 @@ Key differences from the production setup:
 - Passes `--skill-dir` to upload local skill fixtures for testing
 - `--server-url` points to your local devnet node
 
-Use `--node-id` and `--lyquid-id` flags (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID` env vars) if your node requires authentication.
+Pass `--node-id` and `--lyquid-id` (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID`) to select the node to connect to; these are required unless the environment variables are set.
 
 ## Preparing a Node for Search
 

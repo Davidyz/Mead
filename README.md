@@ -78,8 +78,8 @@ they do not activate it themselves.
 
 Useful flags:
 
-- `--wait-timeout` (default `120`): seconds to wait for oracle activation and
-  node registration.
+- `--wait-timeout` (default `120`): seconds to wait for oracle activation and,
+  separately, for the `NodeRegistry` to include the node.
 - `--poll-interval` (default `1.0`): seconds between status checks.
 
 The command is idempotent — safe to rerun. It exits `0` when the node is ready,

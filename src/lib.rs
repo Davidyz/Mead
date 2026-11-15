@@ -53,6 +53,7 @@ state! {
     network bonds: BondRegistry = BondRegistry::default();
     network token_lyquid_id: LyquidID = LyquidID::default();
     network min_bond: U256 = U256::ZERO;
+    network bond_admin: Address = Address::ZERO;
     // Canonical skill bytes persisted in instance state so the in-memory
     // manager can be rebuilt after the Lyquid VM restarts.
     instance skill_blobs: HashMap<Hash, Vec<u8>> = new_hashmap();
@@ -72,15 +73,15 @@ state! {
 // The eth export is required for `shaker deploy -i` to expose the constructor
 // ABI and deliver the ABI-encoded committee and threshold.
 #[method::network(export = eth)]
-fn constructor(
-    ctx: &mut _,
-    committee: Vec<NodeID>,
-    threshold: u16,
-    token_lyquid_id: LyquidID,
-    min_bond: U256,
-) {
-    *ctx.network.token_lyquid_id = token_lyquid_id;
-    *ctx.network.min_bond = min_bond;
+fn constructor(ctx: &mut _, committee: Vec<NodeID>, threshold: u16) {
+    // The deployer configures the optional bond token after deployment through
+    // `configure_bonds`. Keeping this out of the constructor preserves the
+    // existing deployment ABI for devnets that do not have a token yet.
+    *ctx.network.bond_admin = if ctx.caller == Address::ZERO {
+        ctx.origin
+    } else {
+        ctx.caller
+    };
     if let Ok(seq_id) = lyquor_api::sequence_backend_id() {
         let target = OracleTarget {
             seq_id,
@@ -89,6 +90,22 @@ fn constructor(
         let oracle = ctx.network.search.clone();
         let _ = oracle.initialize(&mut ctx, target, committee, threshold);
     }
+}
+
+// Configures the optional bond token and minimum bond.
+//
+// This is a direct network call, not a certified call: the token and minimum
+// only need to be set once by the deployer. A zero token disables bonds.
+#[method::network]
+fn configure_bonds(ctx: &mut _, token_lyquid_id: LyquidID, min_bond: U256) -> LyquidResult<()> {
+    if *ctx.network.bond_admin == Address::ZERO || ctx.caller != *ctx.network.bond_admin {
+        return Err(invalid_input(
+            "only the bond administrator can configure bonds",
+        ));
+    }
+    *ctx.network.token_lyquid_id = token_lyquid_id;
+    *ctx.network.min_bond = min_bond;
+    Ok(())
 }
 
 /// Builds the oracle target for the `search` topic on this Lyquid.

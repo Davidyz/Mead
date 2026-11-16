@@ -8,13 +8,23 @@ from dotenv import load_dotenv
 from .node_manager import NodeManager
 from .skills import SkillManager
 from .tools import MeadTools
-from .utils import parse_args
+from .utils import find_env, parse_args
 
 logger = logging.getLogger(name=__name__)
 
 
 async def main_coro() -> None:
-    load_dotenv()
+    # Prefer .env.mead.dev (written by devnet bootstrap) so that a user's
+    # personal .env is never polluted by test artefacts.  Walk up from the
+    # current working directory to find it, then fall back to the workspace
+    # .env when the devnet file is absent.
+    dev_env = find_env(".env.mead.dev")
+    if dev_env is not None:
+        load_dotenv(dev_env)
+    else:
+        workspace_env = find_env(".env")
+        if workspace_env is not None:
+            load_dotenv(workspace_env)
     cli_args = parse_args()
 
     node_manager = NodeManager(cli_args)

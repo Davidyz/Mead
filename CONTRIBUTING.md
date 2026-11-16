@@ -140,9 +140,11 @@ SKIP_UPLOAD_NODES=1,2 make prepare-nodes
 ```
 
 For local debugging, the script also writes the deployed Lyquid and node1 IDs to
-the repository-root `.env` (`MEAD_LYQUID_ID` and `MEAD_NODE_ID`). The file is
-gitignored and is only a convenience for starting the MCP without repeating
-flags; pass the IDs explicitly for other nodes or deployments.
+the repository-root `.env.mead.dev` (`MEAD_LYQUID_ID` and `MEAD_NODE_ID`). The
+file is gitignored and is only a convenience for starting the MCP without
+repeating flags; pass the IDs explicitly for other nodes or deployments. The
+MCP server reads from `.env.mead.dev` first, falling back to `.env` when the
+devnet file is absent.
 
 To reuse an existing deployment instead of deploying again, pass its Lyquid ID:
 

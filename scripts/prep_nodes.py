@@ -57,7 +57,7 @@ from mead.skills import Skill
 from mead.utils import CLIArgs
 
 ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = ROOT / ".env"
+ENV_FILE = ROOT / ".env.mead.dev"
 SKILLS_DIR = ROOT / "tests" / "skills" / "skills"
 FIXTURE_DIR = ROOT / "tests" / "fixture"
 
@@ -520,7 +520,7 @@ def write_nodes_json(
 
 
 def write_env_file(node: Node, lyquid_id: str) -> Path:
-    """Write the IDs used by the local MCP to the repository-root `.env`."""
+    """Write the IDs used by the local MCP to the repository-root `.env.mead.dev`."""
 
     ENV_FILE.write_text(
         f"MEAD_LYQUID_ID={lyquid_id}\nMEAD_NODE_ID={node.node_id}\n",

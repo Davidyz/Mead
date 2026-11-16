@@ -30,7 +30,7 @@ def test_mcp_startup_skips_uploading_without_a_skill_dir(
     def fail_skill_manager(_path) -> None:
         raise AssertionError("SkillManager must not be constructed")
 
-    monkeypatch.setattr(mead, "load_dotenv", lambda: None)
+    monkeypatch.setattr(mead, "load_dotenv", lambda path=None: None)
     monkeypatch.setattr(
         mead,
         "parse_args",

@@ -77,6 +77,22 @@ def arg_parser() -> ArgumentParser:
     return parser
 
 
+def find_env(filename: str) -> Path | None:
+    """Walk up the directory tree from cwd to find *filename*.
+
+    Returns the first matching file found, or ``None`` when it does not
+    exist anywhere in the ancestry.
+    """
+    candidate = Path.cwd() / filename
+    if candidate.is_file():
+        return candidate
+    for parent in Path.cwd().parents:
+        candidate = parent / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def parse_args(args: list[str] | None = None) -> CLIArgs:
     parser = arg_parser()
     parsed = parser.parse_args(args)

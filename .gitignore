@@ -152,6 +152,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.mead.dev
 .venv
 env/
 venv/

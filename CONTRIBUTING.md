@@ -26,11 +26,14 @@ For debugging and experimenting, you can run the MCP server directly from the lo
 ```
 
 Key differences from the production setup:
-- Uses `uv run mead` (local source) instead of `uvx --from git+...` (remote package)
+- Uses `uv run mead` (local source) instead of `mead` (installed via `uv tool install`)
 - Passes `--skill-dir` to upload local skill fixtures for testing
 - `--server-url` points to your local devnet node
 
 Pass `--node-id` and `--lyquid-id` (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID`) to select the node to connect to; these are required unless the environment variables are set.
+
+Note: the production setup installs `mead` globally via `uv tool install` so the MCP
+server starts quickly without the per-invocation overhead of fetching a remote package.
 
 ## Preparing a Node for Search
 

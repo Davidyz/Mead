@@ -114,10 +114,11 @@ uv run python scripts/search_lifecycle.py --query "skill"
 5. self-registers every node through `POST /nodes/register`, and
 6. waits until the shared `NodeRegistry` contains all nodes.
 
-It requires the stock multi-node Docker devnet from the LDK to be running:
+It requires the stock multi-node Docker devnet from the LDK to be running.
+These `make` targets are convenience wrappers around the LDK's `docker compose` setup:
 
 ```bash
-docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
+make start-devnet
 ```
 
 Then run:
@@ -130,6 +131,12 @@ There is no separate `make setup-search` step. The script funds each node's
 submitter from node1's devnet account by default because self-registration is a
 certified transaction. Use `--no-fund-nodes` to skip that, or `--funding-eth` /
 `--devnet-dir` / `--anvil-container` to override the defaults.
+
+When you are done, tear down the devnet:
+
+```bash
+make stop-devnet
+```
 
 To test with some nodes contributing no skills, pass their indexes to
 `SKIP_UPLOAD_NODES`. All supported skills are redistributed across the remaining

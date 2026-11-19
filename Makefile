@@ -10,8 +10,20 @@ SKIP_UPLOAD_NODES ?=
 PREP_NODES_ARGS := $(if $(LYQUID_ID),--lyquid-id $(LYQUID_ID),) \
 	$(if $(SKIP_UPLOAD_NODES),--skip-nodes $(SKIP_UPLOAD_NODES),)
 
+# Path to the LDK multi-node devnet directory.
+LYQUOR_DEVNET_DIR ?= $(HOME)/.shakenup/ldk/docker/multi
+DEVNET_COMPOSE = -f $(LYQUOR_DEVNET_DIR)/docker-compose.yaml
 
-.PHONY: prepare-skills prepare-nodes check-ldk test cleanup
+
+.PHONY: prepare-skills prepare-nodes start-devnet stop-devnet check-ldk test cleanup
+
+start-devnet:
+	@echo "Starting the multi-node devnet…"
+	docker compose $(DEVNET_COMPOSE) up -d
+
+stop-devnet:
+	@echo "Stopping the multi-node devnet…"
+	docker compose $(DEVNET_COMPOSE) down -v
 
 prepare-skills: cleanup
 	uv sync --group dev
@@ -19,8 +31,14 @@ prepare-skills: cleanup
 
 # Prepare per-node fixtures, upload skills, activate the search oracle, and
 # self-register every node. This requires the stock multi-node Docker devnet
-# from the LDK to be running.
+# from the LDK to be running.  Waits for the setup-devnet container to exit
+# (successfully) before invoking the Python script so that the nodes are
+# fully initialised.
 prepare-nodes: tests/skills/skills
+	@echo "Waiting for the devnet setup-devnet container to finish…"
+	@docker compose $(DEVNET_COMPOSE) wait setup-devnet && \
+		echo "setup-devnet exited successfully." || \
+		(echo "setup-devnet did not exit with code 0; aborting."; exit 1)
 	@echo "This requires the stock multi-node Docker devnet from the LDK to be running."
 	uv run python ./scripts/prep_nodes.py $(PREP_NODES_ARGS)
 

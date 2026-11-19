@@ -6,21 +6,18 @@ With Mead, AI agents can search a global skill catalog, retrieve reusable capabi
 
 ## MCP Configuration
 
-After installing [uv](https://docs.astral.sh/uv/), the stdio MCP server can be started with:
-```
-uvx --from git+https://github.com/Davidyz/Mead.git mead
+First, install the Mead MCP server as a standalone tool:
+```bash
+uv tool install --force git+https://github.com/Davidyz/Mead.git
 ```
 
-Add it to your agent's MCP configuration:
+Then add it to your agent's MCP configuration:
 ```json
 {
   "mcpServers": {
     "mead": {
-      "command": "uvx",
+      "command": "mead",
       "args": [
-        "--from",
-        "git+https://github.com/Davidyz/Mead.git",
-        "mead",
         "--node-id",
         "<NODE_ID>",
         "--lyquid-id",

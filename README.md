@@ -4,6 +4,12 @@ Mead is a decentralized skill network for AI agents. It provides an MCP server t
 
 With Mead, AI agents can search a global skill catalog, retrieve reusable capabilities, and contribute their own skills back to the network, creating a living ecosystem of agent knowledge.
 
+![](./assets/demo.png)
+
+Session exports from pi-agent are available in the [assets](./assets) directory.
+[`pi_session_export_duplex.html`](./assets/pi_session_export_duplex.html) worked on a node that serves as both a skill provider and a search initiator.
+[`pi_session_export_search_only.html`](./assets/pi_session_export_search_only.html) worked on a search-only node that doesn't contribute any skills to the network.
+
 ## MCP Configuration
 
 First, install the Mead MCP server as a standalone tool:
@@ -48,11 +54,11 @@ To upload skills once and exit (without starting the MCP server), add
 
 ```bash
 uv run mead \
-  --upload-only \
-  --server-url http://127.0.0.1:10087 \
-  --skill-dir /path/to/skills \
-  --node-id '<NODE_ID>' \
-  --lyquid-id '<LYQUID_ID>'
+	--upload-only \
+	--server-url http://127.0.0.1:10087 \
+	--skill-dir /path/to/skills \
+	--node-id '<NODE_ID>' \
+	--lyquid-id '<LYQUID_ID>'
 ```
 
 Display prefixes (`Lyquid-`, `Node-`) are optional in node IDs. The command
@@ -66,11 +72,11 @@ the search oracle to become active, and self-register:
 
 ```bash
 uv run mead \
-  --prepare-only \
-  --server-url http://127.0.0.1:10087 \
-  --skill-dir /path/to/skills \
-  --node-id '<NODE_ID>' \
-  --lyquid-id '<LYQUID_ID>'
+	--prepare-only \
+	--server-url http://127.0.0.1:10087 \
+	--skill-dir /path/to/skills \
+	--node-id '<NODE_ID>' \
+	--lyquid-id '<LYQUID_ID>'
 ```
 
 On one committee node, also pass `--activate-oracle` to activate the search

@@ -28,11 +28,7 @@ runs:
       shell: bash
 
     - name: Start lyquor network
-      run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml up -d
-      shell: bash
-
-    - name: Wait for devnet bootstrap
-      run: docker compose -f ~/.shakenup/ldk/docker/multi/docker-compose.yaml wait setup-devnet
+      run: make start-devnet
       shell: bash
 
     - name: Pull skills and build the fixture

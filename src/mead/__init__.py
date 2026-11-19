@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -12,13 +13,26 @@ from .utils import find_env, parse_args
 
 logger = logging.getLogger(name=__name__)
 
+# Resolve .env files relative to this package's directory so the lookup
+# works regardless of the caller's working directory (IDEs often launch
+# MCP servers from arbitrary directories).
+_SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _find_env_in_tree(filename: str) -> Path | None:
+    """Look for *filename* relative to the script directory, then walk up."""
+    candidate = _SCRIPT_DIR / filename
+    if candidate.is_file():
+        return candidate
+    return find_env(filename)
+
 
 async def main_coro() -> None:
     # Prefer .env.mead.dev (written by devnet bootstrap) so that a user's
-    # personal .env is never polluted by test artefacts.  Walk up from the
-    # current working directory to find it, then fall back to the workspace
-    # .env when the devnet file is absent.
-    dev_env = find_env(".env.mead.dev")
+    # personal .env is never polluted by test artefacts.  Resolve relative
+    # to this package's directory first, then fall back to a cwd-based
+    # walk-up so IDEs launching from arbitrary directories still work.
+    dev_env = _find_env_in_tree(".env.mead.dev")
     if dev_env is not None:
         load_dotenv(dev_env)
     else:

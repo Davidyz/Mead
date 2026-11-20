@@ -1,109 +1,5 @@
 # Development Requirements
 
-- [uv](https://docs.astral.sh/uv/) is required for managing the Python environment and running project commands such as `uv run`.
-
-## Running the Local MCP for Debugging
-
-For debugging and experimenting, you can run the MCP server directly from the local source instead of pulling it from the remote repository. Add a configuration like the following to your agent's MCP settings:
-
-```json
-{
-  "mcpServers": {
-    "mead": {
-      "command": "uv",
-      "args": [
-        "run",
-        "mead",
-        "--server-url",
-        "http://127.0.0.1:10087",
-        "--skill-dir",
-        "/path/to/Mead/tests/fixture/node1"
-      ],
-      "timeout": 120
-    }
-  }
-}
-```
-
-Key differences from the production setup:
-- Uses `uv run mead` (local source) instead of `mead` (installed via `uv tool install`)
-- Passes `--skill-dir` to upload local skill fixtures for testing
-- `--server-url` points to your local devnet node
-
-Pass `--node-id` and `--lyquid-id` (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID`) to select the node to connect to; these are required unless the environment variables are set.
-
-Note: the production setup installs `mead` globally via `uv tool install` so the MCP
-server starts quickly without the per-invocation overhead of fetching a remote package.
-
-## Preparing a Node for Search
-
-Every node must be registered in the shared node registry before it can
-participate in network searches — the search query mechanism discovers peers
-from this registry. A "search-only" node is one that contributes no skills
-(`/skills/count` returns 0) but can still query and receive results.
-
-`--prepare-only` uploads local skills (when `--skill-dir` is provided), waits
-for the search oracle, self-registers the node, and exits without starting the
-MCP. It is the per-node counterpart to the `prepare-nodes` devnet bootstrap:
-the Lyquid must already be deployed with its constructor-staged committee.
-
-On a committee node (and only there), let the MCP drive activation:
-
-```bash
-uv run mead \
-  --prepare-only \
-  --activate-oracle \
-  --server-url http://127.0.0.1:10087 \
-  --skill-dir /path/to/skills \
-  --node-id '<NODE_ID>' \
-  --lyquid-id '<LYQUID_ID>'
-```
-
-On every other node, omit `--activate-oracle`; the command waits for the oracle
-to become active, then self-registers:
-
-```bash
-uv run mead \
-  --prepare-only \
-  --server-url http://127.0.0.1:11087 \
-  --skill-dir /path/to/skills \
-  --node-id '<NODE_ID>' \
-  --lyquid-id '<LYQUID_ID>'
-```
-
-Useful flags:
-
-- `--wait-timeout` (default `120`): seconds to wait for oracle activation and,
-  separately, for the `NodeRegistry` to include the node.
-- `--poll-interval` (default `1.0`): seconds between status checks.
-
-The command is idempotent and safe to rerun: an active oracle and a registered
-node return immediately. It exits `0` when the node is ready, and non-zero with
-the last HTTP error/timeout otherwise. `--upload-only` and `--prepare-only` are
-mutually exclusive; `--activate-oracle` requires `--prepare-only`.
-
-# Testing
-
-The standard way to run tests for Lyquid is `shaker test Cargo.toml`.
-
-For this app, some test cases are integration tests that require loading actual skills.
-To prepare the skill catalog for those tests, run `make prepare-skills` before running the tests.
-
-Run the Python tests with `make test`. This prepares the skill fixtures via
-`make prepare-skills` first if they are not already present.
-
-When a multi-node devnet has been prepared (see below), `make test` also runs the
-search lifecycle integration test in `tests/test_search_lifecycle.py`. That test
-drives `/search/new` → `/search/status` → `/search/get` against the devnet and is
-skipped automatically when `tests/fixture/nodes.json` is missing or the devnet is
-not reachable.
-
-To run the lifecycle manually against a prepared devnet:
-
-```bash
-uv run python scripts/search_lifecycle.py --query "skill"
-```
-
 ## Preparing a Multi-Node Devnet
 
 `scripts/prep_nodes.py` is the full devnet bootstrap. It:
@@ -130,16 +26,10 @@ Then run:
 make prepare-nodes
 ```
 
-There is no separate `make setup-search` step. The script funds each node's
-submitter from node1's devnet account by default because self-registration is a
-certified transaction. Use `--no-fund-nodes` to skip that, or `--funding-eth` /
-`--devnet-dir` / `--anvil-container` to override the defaults.
-
-When you are done, tear down the devnet:
-
-```bash
-make stop-devnet
-```
+The script funds each node's submitter from node1's devnet account by default 
+because self-registration is a certified transaction. Use `--no-fund-nodes` to skip 
+that, or `--funding-eth` / `--devnet-dir` / `--anvil-container` to override the 
+defaults.
 
 To test with some nodes contributing no skills, pass their indexes to
 `SKIP_UPLOAD_NODES`. All supported skills are redistributed across the remaining
@@ -180,6 +70,62 @@ and `GET /nodes/list` contains every node ID. Instance endpoints are routed with
 the virtual `Host` header `<lyquid-label>.<node-label>` (strip the `Lyquid-` and
 `Node-` prefixes); the `scripts/search_lifecycle.py` and `tests/test_search_lifecycle.py`
 helpers build it from `tests/fixture/nodes.json`.
+
+## Running the Local MCP for Debugging
+
+For debugging and experimenting, you can run the MCP server directly from the local source instead of pulling it from the remote repository. Add a configuration like the following to your agent's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "mead": {
+      "command": "uv",
+      "args": [
+        "run",
+        "mead",
+        "--server-url",
+        "http://127.0.0.1:10087",
+        "--skill-dir",
+        "/path/to/Mead/tests/fixture/node1"
+      ],
+      "timeout": 120
+    }
+  }
+}
+```
+
+Key differences from the production setup:
+- Uses `uv run mead` (local source) instead of `mead` (installed via `uv tool install`)
+- Passes `--skill-dir` to upload local skill fixtures for testing
+- `--server-url` points to your local devnet node
+
+Pass `--node-id` and `--lyquid-id` (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID`) to select the node to connect to; these are required unless the environment variables are set.
+
+Note: the production setup installs `mead` globally via `uv tool install` so the MCP
+server starts quickly without the per-invocation overhead of fetching a remote package.
+
+# Testing
+
+The standard way to run tests for Lyquid is `shaker test Cargo.toml`.
+
+For this app, some test cases are integration tests that require loading actual skills.
+To prepare the skill catalog for those tests, run `make prepare-skills` before running the tests.
+
+Run the Python tests with `make test`. This prepares the skill fixtures via
+`make prepare-skills` first if they are not already present.
+
+When a multi-node devnet has been prepared (see below), `make test` also runs the
+search lifecycle integration test in `tests/test_search_lifecycle.py`. That test
+drives `/search/new` → `/search/status` → `/search/get` against the devnet and is
+skipped automatically when `tests/fixture/nodes.json` is missing or the devnet is
+not reachable.
+
+To run the lifecycle manually against a prepared devnet:
+
+```bash
+uv run python scripts/search_lifecycle.py --query "skill"
+```
+
 
 # Creating a new Commit
 

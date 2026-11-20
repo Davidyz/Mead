@@ -1,12 +1,21 @@
 # Mead
 
-Mead is a decentralized skill network for AI agents. It provides an MCP server that enables agents to discover, share, and upload skills across a distributed network of nodes — all powered by the Lyquid blockchain framework for trustless coordination.
+Mead is a decentralized skill network for AI agents.
+It provides an MCP server that enables agents to discover, share, and upload skills across a distributed network of nodes — all powered by the Lyquid blockchain framework for trustless coordination.
 
-With Mead, AI agents can search a global skill catalog, retrieve reusable capabilities, and contribute their own skills back to the network, creating a living ecosystem of agent knowledge.
+With Mead, AI agents can search a global skill catalogue, retrieve reusable capabilities, and contribute their own skills back to the network, creating a living ecosystem of agent knowledge.
+
+![](./assets/demo.png)
+
+Session exports from pi-agent are available in the [assets](./assets) directory.
+[`pi_session_export_duplex.html`](./assets/pi_session_export_duplex.html) worked on a node that serves as both a skill provider and a search initiator.
+[`pi_session_export_search_only.html`](./assets/pi_session_export_search_only.html) worked on a search-only node that doesn't contribute any skills to the network.
 
 ## MCP Configuration
 
-First, install the Mead MCP server as a standalone tool:
+> To try this out on a devnet, please follow the developer guide in [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+First, install the Mead MCP server as a standalone tool using [uv](https://docs.astral.sh/uv/getting-started/installation/):
 ```bash
 uv tool install --force git+https://github.com/Davidyz/Mead.git
 ```
@@ -48,11 +57,11 @@ To upload skills once and exit (without starting the MCP server), add
 
 ```bash
 uv run mead \
-  --upload-only \
-  --server-url http://127.0.0.1:10087 \
-  --skill-dir /path/to/skills \
-  --node-id '<NODE_ID>' \
-  --lyquid-id '<LYQUID_ID>'
+	--upload-only \
+	--server-url http://127.0.0.1:10087 \
+	--skill-dir /path/to/skills \
+	--node-id '<NODE_ID>' \
+	--lyquid-id '<LYQUID_ID>'
 ```
 
 Display prefixes (`Lyquid-`, `Node-`) are optional in node IDs. The command
@@ -60,17 +69,17 @@ prints how many skills were uploaded and the node's current total.
 
 ## Preparing Your Node
 
-Before the MCP can participate in network searches, the node must be registered
-in the shared node registry. Run `--prepare-only` to upload skills, wait for
-the search oracle to become active, and self-register:
+For a freshly deployed node to participate in the search, it must be registered
+in the shared node registry. Run the CLI with the `--prepare-only` to 
+self-register (after the search oracle becomes active, if applicable):
 
 ```bash
 uv run mead \
-  --prepare-only \
-  --server-url http://127.0.0.1:10087 \
-  --skill-dir /path/to/skills \
-  --node-id '<NODE_ID>' \
-  --lyquid-id '<LYQUID_ID>'
+	--prepare-only \
+	--server-url http://127.0.0.1:10087 \
+	--skill-dir /path/to/skills \
+	--node-id '<NODE_ID>' \
+	--lyquid-id '<LYQUID_ID>'
 ```
 
 On one committee node, also pass `--activate-oracle` to activate the search

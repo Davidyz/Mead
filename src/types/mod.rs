@@ -1,8 +1,10 @@
+pub mod bonds;
 pub mod merkle;
 pub mod nodes;
 pub mod query;
 pub mod results;
 
+pub use bonds::{BPS_DENOMINATOR, BondInfo, BondRegistry};
 pub use merkle::{Hash, MerkleProof, MerkleTree, SiblingDirection, parse_hash};
 pub use nodes::NodeRegistry;
 pub use query::{

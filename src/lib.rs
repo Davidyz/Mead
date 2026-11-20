@@ -1073,7 +1073,7 @@ fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Res
 //     {
 //       "skill_digest": "0x51bd...",
 //       "bm25_score": 1231569101,
-//       "origin": "Node-3l2hq7fz4vx6yq3p2a5m5nq5b7m4t5k6w7c5d3j6h4r2e5a7"
+//       "origin": "Node-3l2hq7fz4vx6yq3p2a5m5nq5b7m4t5k6w7c5d3j6h4r2e5a7b2n4x6c"
 //     }
 //   ]
 // }
@@ -1082,10 +1082,12 @@ fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Res
 // `NodeID`, matches, BM25 scores, Merkle root, timestamp, and signature.
 // `aggregated` deduplicates matches by skill digest, keeping the best BM25 score
 // per skill and ordering by descending score then digest. Its `origin` field
-// names the peer that supplied the retained score (equal scores keep the first
-// result in sender order), so a client can confirm matches came from several
-// nodes. `origin` is computed locally from the result's signed sender and is not
-// part of the on-chain `SearchResult`.
+// names the peer that supplied the retained score. Registry results are ordered
+// by sender before aggregation and the initiator's own result is appended last,
+// so an equal score keeps the smallest-sender peer, or the initiator if no peer
+// matched. That origin lets a client confirm matches came from several nodes.
+// It is computed locally from the result's signed sender and is not part of the
+// on-chain `SearchResult`.
 //
 // Pending response - `409 Conflict`:
 // ```json

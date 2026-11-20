@@ -25,8 +25,8 @@ class ShortTimeoutManager:
         self._manager = manager
 
     @property
-    def _node_id(self) -> str | None:
-        return self._manager._node_id
+    def node_id(self) -> str | None:
+        return self._manager.node_id
 
     def search_skills(self, query: str, top_k: int = 5):
         return self._manager.search_skills(

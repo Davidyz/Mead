@@ -143,6 +143,10 @@ pub(crate) fn search_results_response(
 /// for this skill, which lets clients confirm that results came from multiple
 /// peers. It is derived locally from the result's authenticated sender, so it is
 /// not part of the on-chain result and never round-trips through a peer's JSON.
+///
+/// Note that BM25 scores are computed against each peer's local corpus, so
+/// `origin` identifies who reported the retained score, not the best node for
+/// that skill network-wide.
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct AggregatedMatch {
     /// Digest of the matched skill.

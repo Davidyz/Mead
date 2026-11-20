@@ -516,3 +516,20 @@ def test_search_match_defaults_missing_origin_to_none() -> None:
     match = SearchMatch.from_dict({"skill_digest": "0xabc", "bm25_score": 42})
 
     assert match == SearchMatch("0xabc", 42, None)
+
+
+def test_search_match_rejects_non_string_origin() -> None:
+    with pytest.raises(TypeError, match="origin must be a string"):
+        SearchMatch.from_dict({"skill_digest": "0xabc", "bm25_score": 42, "origin": 7})
+
+
+def test_skill_summary_rejects_non_string_origin() -> None:
+    with pytest.raises(TypeError, match="origin must be a string"):
+        SkillSummary.from_dict(
+            {
+                "name": "demo",
+                "description": "A demo skill",
+                "digest": "0xabc",
+                "origin": [],
+            }
+        )

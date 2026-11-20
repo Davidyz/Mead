@@ -307,6 +307,8 @@ fn aggregate_matches_keeps_best_score_and_sorts() {
 
     let aggregated = aggregate_matches(&[&first, &second]);
     assert_eq!(aggregated.len(), 3);
+    // Every production match knows which peer supplied its score.
+    assert!(aggregated.iter().all(|entry| entry.origin.is_some()));
     assert_eq!(aggregated[0].skill_digest, digest_a);
     assert_eq!(aggregated[0].bm25_score, 9);
     assert_eq!(

@@ -27,7 +27,7 @@ class FakeNodeManager:
         self.skills = skills
         self.timed_out = timed_out
         self.unresolved_digests = unresolved_digests or []
-        self._node_id = node_id
+        self.node_id = node_id
         self.search_calls: list[tuple[str, int]] = []
         self.get_calls: list[str] = []
 
@@ -122,6 +122,16 @@ def test_mcp_search_skills_omits_absent_origin() -> None:
     payload = tools.mcp_search_skills("demo query")
 
     assert "origin" not in payload["skills"][0]
+
+
+def test_mcp_search_skills_keeps_origin_without_a_local_node_id() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo", "Node-peer")
+    fake = FakeNodeManager([summary], {}, node_id=None)
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert payload["skills"][0]["origin"] == "Node-peer"
 
 
 def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:

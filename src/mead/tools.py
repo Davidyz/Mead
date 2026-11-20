@@ -89,7 +89,7 @@ class MeadTools:
 
     def __init__(self, node_manager: NodeManager):
         self._node_manager = node_manager
-        self._node_id = node_manager._node_id
+        self._node_id = node_manager.node_id
 
     def mcp_search_skills(self, query: str, top_k: int = 3) -> dict[str, Any]:
         """Search the network for skills using a lexical BM25 query.

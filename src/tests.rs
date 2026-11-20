@@ -278,10 +278,12 @@ fn aggregate_matches_keeps_best_score_and_sorts() {
             SkillMatch {
                 skill_digest: digest_a,
                 bm25_score: 2,
+                origin: None,
             },
             SkillMatch {
                 skill_digest: digest_c,
                 bm25_score: 4,
+                origin: None,
             },
         ],
         1,
@@ -294,10 +296,12 @@ fn aggregate_matches_keeps_best_score_and_sorts() {
             SkillMatch {
                 skill_digest: digest_a,
                 bm25_score: 9,
+                origin: None,
             },
             SkillMatch {
                 skill_digest: digest_b,
                 bm25_score: 5,
+                origin: None,
             },
         ],
         2,

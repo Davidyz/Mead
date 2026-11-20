@@ -14,12 +14,15 @@ from .skills import Skill, SkillResource
 type SkillContent = TextContent | EmbeddedResource
 
 
-def _summary_payload(summary: SkillSummary) -> dict[str, str]:
-    return {
+def _summary_payload(summary: SkillSummary) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "name": summary.name,
         "description": summary.description,
         "digest": summary.digest,
     }
+    if summary.origin is not None:
+        result["origin"] = summary.origin
+    return result
 
 
 def _mime_type(path: str) -> str:

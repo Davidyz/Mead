@@ -278,6 +278,7 @@ pub fn search(query: &str, top_k: usize, skills: &[Skill]) -> Vec<SkillMatch> {
         .map(|(indexed, bm25_score)| SkillMatch {
             skill_digest: indexed.digest,
             bm25_score,
+            origin: None,
         })
         .collect();
 

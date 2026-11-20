@@ -136,23 +136,26 @@ pub(crate) fn search_results_response(
 // Deduplicates matches by skill digest, keeping the best score seen for each
 // skill, and orders them by descending score then digest.
 pub(crate) fn aggregate_matches(results: &[&SearchResult]) -> Vec<SkillMatch> {
-    let mut best_scores: HashMap<Hash, Bm25Score> = new_hashmap();
+    // (score, origin) so we track which peer provided the best score.
+    let mut best_scores: HashMap<Hash, (Bm25Score, Option<String>)> = new_hashmap();
     for result in results {
         for skill_match in &result.matches {
-            let score = best_scores
+            let entry = best_scores
                 .entry(skill_match.skill_digest)
-                .or_insert(skill_match.bm25_score);
-            if skill_match.bm25_score > *score {
-                *score = skill_match.bm25_score;
+                .or_insert((skill_match.bm25_score, Some(result.sender.to_string())));
+            if skill_match.bm25_score > entry.0 {
+                entry.0 = skill_match.bm25_score;
+                entry.1 = Some(result.sender.to_string());
             }
         }
     }
 
     let mut aggregated: Vec<SkillMatch> = best_scores
         .into_iter()
-        .map(|(skill_digest, bm25_score)| SkillMatch {
+        .map(|(skill_digest, (bm25_score, origin))| SkillMatch {
             skill_digest,
             bm25_score,
+            origin,
         })
         .collect();
     aggregated.sort_by(|left, right| {

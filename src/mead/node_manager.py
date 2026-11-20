@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SkillSummary:
-    """A skill entry returned by ``GET /skills/list``."""
+    """A skill entry returned by ``GET /skills/list`` or a search match."""
 
     name: str
     description: str
     digest: str
+    origin: str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
@@ -28,6 +29,7 @@ class SkillSummary:
             name=data["name"],
             description=data["description"],
             digest=data["digest"],
+            origin=data.get("origin"),
         )
 
 
@@ -61,6 +63,7 @@ class SearchMatch:
 
     skill_digest: str
     bm25_score: int
+    origin: str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
@@ -71,6 +74,7 @@ class SearchMatch:
         return cls(
             skill_digest=digest,
             bm25_score=_json_int(data.get("bm25_score")),
+            origin=data.get("origin"),
         )
 
 
@@ -459,6 +463,7 @@ class NodeManager:
                     name=skill.name,
                     description=skill.description,
                     digest=match.skill_digest,
+                    origin=match.origin,
                 )
             )
         return summaries, unresolved

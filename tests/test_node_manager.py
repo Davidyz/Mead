@@ -365,14 +365,16 @@ def test_search_skills_polls_status_and_maps_matches(
             timed_out=False,
             verified_results=3,
             rejected_results=0,
-            aggregated=[SearchMatch("0xabc", 42)],
+            aggregated=[SearchMatch("0xabc", 42, "Node-peer1")],
         ),
     )
     monkeypatch.setattr(manager, "get_skill", lambda digest: skill)
 
     outcome = manager.search_skills("demo", top_k=3, timeout=1.0, poll_interval=0.01)
 
-    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.skills == [
+        SkillSummary("demo", "A demo skill", "0xabc", "Node-peer1")
+    ]
     assert outcome.timed_out is False
     assert outcome.received_results == 3
     assert outcome.expected_results == 3
@@ -414,7 +416,10 @@ def test_search_skills_skips_unresolved_skill_bodies(
             False,
             2,
             0,
-            [SearchMatch("0xabc", 10), SearchMatch("0xmissing", 5)],
+            [
+                SearchMatch("0xabc", 10, "Node-peer1"),
+                SearchMatch("0xmissing", 5, "Node-peer2"),
+            ],
         ),
     )
     monkeypatch.setattr(manager, "get_skill", get_skill)
@@ -422,7 +427,9 @@ def test_search_skills_skips_unresolved_skill_bodies(
 
     outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
 
-    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.skills == [
+        SkillSummary("demo", "A demo skill", "0xabc", "Node-peer1")
+    ]
     assert outcome.unresolved_digests == ["0xmissing"]
     assert "0xmissing" in caplog.text
 

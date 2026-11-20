@@ -14,14 +14,19 @@ from .skills import Skill, SkillResource
 type SkillContent = TextContent | EmbeddedResource
 
 
-def _summary_payload(summary: SkillSummary) -> dict[str, Any]:
+def _summary_payload(
+    summary: SkillSummary, my_node_id: str | None
+) -> dict[str, Any]:
     result: dict[str, Any] = {
         "name": summary.name,
         "description": summary.description,
         "digest": summary.digest,
     }
-    if summary.origin is not None:
-        result["origin"] = summary.origin
+    origin = summary.origin
+    if origin is not None and origin == my_node_id:
+        origin = "local"
+    if origin is not None:
+        result["origin"] = origin
     return result
 
 
@@ -86,6 +91,7 @@ class MeadTools:
 
     def __init__(self, node_manager: NodeManager):
         self._node_manager = node_manager
+        self._node_id = node_manager._node_id
 
     def mcp_search_skills(self, query: str, top_k: int = 3) -> dict[str, Any]:
         """Search the network for skills using a lexical BM25 query.
@@ -109,7 +115,9 @@ class MeadTools:
         """
         outcome = self._node_manager.search_skills(query, top_k=top_k)
         return {
-            "skills": [_summary_payload(summary) for summary in outcome.skills],
+            "skills": [
+                _summary_payload(summary, self._node_id) for summary in outcome.skills
+            ],
             "timed_out": outcome.timed_out,
             "received_results": outcome.received_results,
             "expected_results": outcome.expected_results,

@@ -21,11 +21,13 @@ class FakeNodeManager:
         *,
         timed_out: bool = False,
         unresolved_digests: list[str] | None = None,
+        node_id: str | None = None,
     ):
         self.summaries = summaries
         self.skills = skills
         self.timed_out = timed_out
         self.unresolved_digests = unresolved_digests or []
+        self._node_id = node_id
         self.search_calls: list[tuple[str, int]] = []
         self.get_calls: list[str] = []
 

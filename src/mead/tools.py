@@ -14,9 +14,7 @@ from .skills import Skill, SkillResource
 type SkillContent = TextContent | EmbeddedResource
 
 
-def _summary_payload(
-    summary: SkillSummary, my_node_id: str | None
-) -> dict[str, Any]:
+def _summary_payload(summary: SkillSummary, my_node_id: str | None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "name": summary.name,
         "description": summary.description,

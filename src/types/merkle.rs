@@ -67,12 +67,14 @@ mod hex {
         if !hex.is_ascii() {
             return Err("hex string must contain only ASCII characters".into());
         }
-        if hex.len() % 2 != 0 {
+        if !hex.len().is_multiple_of(2) {
             return Err("hex string must have an even number of characters".into());
         }
 
         hex.as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let pair = core::str::from_utf8(pair).map_err(|e| e.to_string())?;
                 u8::from_str_radix(pair, 16).map_err(|e| e.to_string())
@@ -328,10 +330,10 @@ mod tests {
         let tree = MerkleTree::new(leaves.clone());
 
         // Verify each leaf's proof
-        for i in 0..4 {
+        for (i, leaf) in leaves.iter().enumerate() {
             let proof = tree.prove(i);
             assert!(tree.verify(&proof));
-            assert_eq!(proof.leaf_hash, hash_leaf(leaves[i]));
+            assert_eq!(proof.leaf_hash, hash_leaf(*leaf));
         }
     }
 

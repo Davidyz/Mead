@@ -1,4 +1,4 @@
-use crate::api::search::aggregate_matches;
+use crate::api::search::{AggregatedMatch, aggregate_matches};
 use crate::api::skills::{
     parse_skill_get_request, parse_uploaded_skill, skill_count_http_response,
 };
@@ -307,12 +307,137 @@ fn aggregate_matches_keeps_best_score_and_sorts() {
 
     let aggregated = aggregate_matches(&[&first, &second]);
     assert_eq!(aggregated.len(), 3);
+    // Every production match knows which peer supplied its score.
+    assert!(aggregated.iter().all(|entry| entry.origin.is_some()));
     assert_eq!(aggregated[0].skill_digest, digest_a);
     assert_eq!(aggregated[0].bm25_score, 9);
+    assert_eq!(
+        aggregated[0].origin,
+        Some(NodeID::new([2u8; 32]).to_string())
+    );
     assert_eq!(aggregated[1].skill_digest, digest_b);
     assert_eq!(aggregated[1].bm25_score, 5);
+    assert_eq!(
+        aggregated[1].origin,
+        Some(NodeID::new([2u8; 32]).to_string())
+    );
     assert_eq!(aggregated[2].skill_digest, digest_c);
     assert_eq!(aggregated[2].bm25_score, 4);
+    assert_eq!(
+        aggregated[2].origin,
+        Some(NodeID::new([1u8; 32]).to_string())
+    );
+}
+
+#[lyquid_test::test]
+fn aggregate_matches_reports_the_peer_with_the_best_score() {
+    let query_id = blake3::hash(b"query");
+    let shared = blake3::hash(b"shared-skill");
+    let first_sender = NodeID::new([1u8; 32]);
+    let second_sender = NodeID::new([2u8; 32]);
+
+    // The shared skill is answered by both peers; peer 2 scores it higher.
+    let first = SearchResult::new(
+        query_id,
+        vec![SkillMatch {
+            skill_digest: shared,
+            bm25_score: 3,
+        }],
+        1,
+        first_sender,
+    )
+    .unwrap();
+    let second = SearchResult::new(
+        query_id,
+        vec![SkillMatch {
+            skill_digest: shared,
+            bm25_score: 7,
+        }],
+        2,
+        second_sender,
+    )
+    .unwrap();
+
+    let aggregated = aggregate_matches(&[&first, &second]);
+    assert_eq!(aggregated.len(), 1);
+    assert_eq!(aggregated[0].bm25_score, 7);
+    assert_eq!(aggregated[0].origin, Some(second_sender.to_string()));
+}
+
+#[lyquid_test::test]
+fn aggregate_matches_breaks_equal_scores_by_input_order() {
+    let query_id = blake3::hash(b"query");
+    let shared = blake3::hash(b"shared-skill");
+    let first_sender = NodeID::new([1u8; 32]);
+    let second_sender = NodeID::new([2u8; 32]);
+
+    // Equal scores: the first result in the slice wins. Callers pass results in
+    // registry order (sender bytes ascending), so the origin is deterministic.
+    let first = SearchResult::new(
+        query_id,
+        vec![SkillMatch {
+            skill_digest: shared,
+            bm25_score: 4,
+        }],
+        1,
+        first_sender,
+    )
+    .unwrap();
+    let second = SearchResult::new(
+        query_id,
+        vec![SkillMatch {
+            skill_digest: shared,
+            bm25_score: 4,
+        }],
+        2,
+        second_sender,
+    )
+    .unwrap();
+
+    let aggregated = aggregate_matches(&[&first, &second]);
+    assert_eq!(aggregated.len(), 1);
+    assert_eq!(aggregated[0].origin, Some(first_sender.to_string()));
+}
+
+#[lyquid_test::test]
+fn aggregate_matches_serializes_origin() {
+    let query_id = blake3::hash(b"query");
+    let digest = blake3::hash(b"skill");
+    let sender = NodeID::new([3u8; 32]);
+    let result = SearchResult::new(
+        query_id,
+        vec![SkillMatch {
+            skill_digest: digest,
+            bm25_score: 6,
+        }],
+        1,
+        sender,
+    )
+    .unwrap();
+
+    // The client contract: `aggregated` entries carry digest, score, and origin.
+    let aggregated = aggregate_matches(&[&result]);
+    let json = serde_json::to_value(&aggregated[0]).unwrap();
+    assert_eq!(json["bm25_score"].as_i64(), Some(6));
+    assert_eq!(json["origin"].as_str(), Some(sender.to_string().as_str()));
+    let serialized_digest = json["skill_digest"].as_str().unwrap();
+    assert!(serialized_digest.starts_with("0x"));
+    assert_eq!(serialized_digest.trim_start_matches("0x").len(), 64);
+}
+
+#[lyquid_test::test]
+fn aggregate_match_omits_absent_origin() {
+    // The client treats a missing `origin` as "unknown", so it must not be
+    // serialized as `null`.
+    let json = serde_json::to_value(AggregatedMatch {
+        skill_digest: blake3::hash(b"skill"),
+        bm25_score: 6,
+        origin: None,
+    })
+    .unwrap();
+
+    assert_eq!(json["bm25_score"].as_i64(), Some(6));
+    assert!(json.get("origin").is_none());
 }
 
 #[lyquid_test::test]

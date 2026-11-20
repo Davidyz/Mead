@@ -90,7 +90,7 @@ impl ResultRegistry {
             .filter(|((id, _), _)| id == query_id)
             .map(|(_, result)| result)
             .collect();
-        results.sort_by(|left, right| left.sender.0.cmp(&right.sender.0));
+        results.sort_by_key(|result| result.sender.0);
         results
     }
 

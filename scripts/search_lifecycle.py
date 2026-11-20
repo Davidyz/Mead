@@ -143,6 +143,13 @@ def enrich_with_skill_names(body: Any, names: dict[str, str]) -> Any:
     for match in body.get("aggregated", []):
         digest = str(match.get("skill_digest", "")).removeprefix("0x").lower()
         match["skill_name"] = names.get(digest, "unknown")
+        origin = match.get("origin")
+        if origin:
+            match["origin_label"] = (
+                f"Node-{origin.removeprefix('Node-')[:12]}"
+                if origin.startswith("Node-")
+                else origin[:12]
+            )
 
     return body
 
@@ -312,7 +319,10 @@ def main() -> int:
 
     print("\nAggregated results:")
     for match in result.results.get("aggregated", []):
-        print(f"  {match.get('skill_name', 'unknown')}: {match.get('bm25_score')}")
+        origin = match.get("origin_label", match.get("origin", ""))
+        print(
+            f"  {match.get('skill_name', 'unknown')}: {match.get('bm25_score')} (origin: {origin})"
+        )
     return 0
 
 

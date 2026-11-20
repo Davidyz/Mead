@@ -365,7 +365,7 @@ fn unregister_node_endpoint(ctx: &mut _, _req: http::Request) -> LyquidResult<ht
 #[method::instance(export = http, method = "GET", path_prefix = "/nodes/list")]
 fn list_registered_nodes(ctx: &_, _req: http::Request) -> LyquidResult<http::Response> {
     let mut nodes: Vec<NodeID> = ctx.network.node_registry.nodes().iter().copied().collect();
-    nodes.sort_by(|left, right| left.0.cmp(&right.0));
+    nodes.sort_by_key(|node| node.0);
     let nodes: Vec<String> = nodes.into_iter().map(|node| node.to_string()).collect();
     let body = serde_json::json!({ "nodes": nodes }).to_string();
     Ok(http_json_response(200, &body))
@@ -872,7 +872,7 @@ fn get_responders(ctx: &_, query_id: HashBytes) -> LyquidResult<Vec<NodeID>> {
         .responders(&query_id)
         .map(|nodes| nodes.iter().copied().collect())
         .unwrap_or_default();
-    responders.sort_by(|left, right| left.0.cmp(&right.0));
+    responders.sort_by_key(|node| node.0);
     Ok(responders)
 }
 
@@ -1070,14 +1070,24 @@ fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Res
 //   "rejected_results": 0,
 //   "results": [],
 //   "aggregated": [
-//     { "skill_digest": "0x51bd...", "bm25_score": 1231569101 }
+//     {
+//       "skill_digest": "0x51bd...",
+//       "bm25_score": 1231569101,
+//       "origin": "Node-ve3tav5jw5ico7or34gcb6ni7rtmd35uokriuijygabd3tsltd7fj6ia"
+//     }
 //   ]
 // }
 // ```
 // Each entry in `results` is a `SearchResult` containing the submitting peer's
 // `NodeID`, matches, BM25 scores, Merkle root, timestamp, and signature.
 // `aggregated` deduplicates matches by skill digest, keeping the best BM25 score
-// per skill and ordering by descending score then digest.
+// per skill and ordering by descending score then digest. Its `origin` field
+// names the peer that supplied the retained score. Registry results are ordered
+// by sender before aggregation and the initiator's own result is appended last,
+// so an equal score keeps the smallest-sender peer, or the initiator if no peer
+// matched. That origin lets a client confirm matches came from several nodes.
+// It is computed locally from the result's signed sender and is not part of the
+// on-chain `SearchResult`.
 //
 // Pending response - `409 Conflict`:
 // ```json

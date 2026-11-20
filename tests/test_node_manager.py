@@ -365,14 +365,16 @@ def test_search_skills_polls_status_and_maps_matches(
             timed_out=False,
             verified_results=3,
             rejected_results=0,
-            aggregated=[SearchMatch("0xabc", 42)],
+            aggregated=[SearchMatch("0xabc", 42, "Node-peer1")],
         ),
     )
     monkeypatch.setattr(manager, "get_skill", lambda digest: skill)
 
     outcome = manager.search_skills("demo", top_k=3, timeout=1.0, poll_interval=0.01)
 
-    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.skills == [
+        SkillSummary("demo", "A demo skill", "0xabc", "Node-peer1")
+    ]
     assert outcome.timed_out is False
     assert outcome.received_results == 3
     assert outcome.expected_results == 3
@@ -414,7 +416,10 @@ def test_search_skills_skips_unresolved_skill_bodies(
             False,
             2,
             0,
-            [SearchMatch("0xabc", 10), SearchMatch("0xmissing", 5)],
+            [
+                SearchMatch("0xabc", 10, "Node-peer1"),
+                SearchMatch("0xmissing", 5, "Node-peer2"),
+            ],
         ),
     )
     monkeypatch.setattr(manager, "get_skill", get_skill)
@@ -422,7 +427,9 @@ def test_search_skills_skips_unresolved_skill_bodies(
 
     outcome = manager.search_skills("demo", timeout=1.0, poll_interval=0.01)
 
-    assert outcome.skills == [SkillSummary("demo", "A demo skill", "0xabc")]
+    assert outcome.skills == [
+        SkillSummary("demo", "A demo skill", "0xabc", "Node-peer1")
+    ]
     assert outcome.unresolved_digests == ["0xmissing"]
     assert "0xmissing" in caplog.text
 
@@ -494,3 +501,35 @@ def test_oracle_status_tolerates_null_epochs() -> None:
 def test_registration_response_rejects_non_object_json() -> None:
     with pytest.raises(TypeError, match="expected a JSON object"):
         NodeRegistrationResponse.from_dict(cast(Any, []))
+
+
+def test_search_match_parses_origin_when_present() -> None:
+    match = SearchMatch.from_dict(
+        {"skill_digest": "0xabc", "bm25_score": 42, "origin": "Node-peer"}
+    )
+
+    assert match == SearchMatch("0xabc", 42, "Node-peer")
+
+
+def test_search_match_defaults_missing_origin_to_none() -> None:
+    # Older nodes do not emit `origin`; the field is optional on the wire.
+    match = SearchMatch.from_dict({"skill_digest": "0xabc", "bm25_score": 42})
+
+    assert match == SearchMatch("0xabc", 42, None)
+
+
+def test_search_match_rejects_non_string_origin() -> None:
+    with pytest.raises(TypeError, match="origin must be a string"):
+        SearchMatch.from_dict({"skill_digest": "0xabc", "bm25_score": 42, "origin": 7})
+
+
+def test_skill_summary_rejects_non_string_origin() -> None:
+    with pytest.raises(TypeError, match="origin must be a string"):
+        SkillSummary.from_dict(
+            {
+                "name": "demo",
+                "description": "A demo skill",
+                "digest": "0xabc",
+                "origin": [],
+            }
+        )

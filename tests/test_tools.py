@@ -21,11 +21,13 @@ class FakeNodeManager:
         *,
         timed_out: bool = False,
         unresolved_digests: list[str] | None = None,
+        node_id: str | None = None,
     ):
         self.summaries = summaries
         self.skills = skills
         self.timed_out = timed_out
         self.unresolved_digests = unresolved_digests or []
+        self.node_id = node_id
         self.search_calls: list[tuple[str, int]] = []
         self.get_calls: list[str] = []
 
@@ -83,6 +85,53 @@ def test_mcp_search_skills_surfaces_partial_result_metadata() -> None:
         "rejected_results": 0,
         "unresolved_digests": ["digest-missing"],
     }
+
+
+def test_mcp_search_skills_includes_peer_origin() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo", "Node-peer")
+    fake = FakeNodeManager([summary], {}, node_id="Node-me")
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert payload["skills"] == [
+        {
+            "name": "demo",
+            "description": "A demo skill",
+            "digest": "digest-demo",
+            "origin": "Node-peer",
+        }
+    ]
+
+
+def test_mcp_search_skills_labels_own_node_origin_as_local() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo", "Node-me")
+    fake = FakeNodeManager([summary], {}, node_id="Node-me")
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert payload["skills"][0]["origin"] == "local"
+
+
+def test_mcp_search_skills_omits_absent_origin() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo")
+    fake = FakeNodeManager([summary], {}, node_id="Node-me")
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert "origin" not in payload["skills"][0]
+
+
+def test_mcp_search_skills_keeps_origin_without_a_local_node_id() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo", "Node-peer")
+    fake = FakeNodeManager([summary], {}, node_id=None)
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert payload["skills"][0]["origin"] == "Node-peer"
 
 
 def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:

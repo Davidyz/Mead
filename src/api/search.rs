@@ -2,7 +2,8 @@
 
 use lyquid::prelude::*;
 
-use crate::types::{Bm25Score, SearchResult, SkillMatch, parse_hash};
+use crate::types::merkle::serialize_hash;
+use crate::types::{Bm25Score, SearchResult, parse_hash};
 use crate::verify;
 
 use super::http::http_json_response;
@@ -133,26 +134,55 @@ pub(crate) fn search_results_response(
     http_json_response(200, &body)
 }
 
+/// A locally aggregated search match, returned to the client for a completed
+/// query.
+///
+/// Unlike [`SkillMatch`](crate::types::SkillMatch), which is stored in consensus
+/// state, this type only exists in the initiating node's HTTP response. `origin`
+/// is the (signed) sender of the [`SearchResult`] that supplied the best score
+/// for this skill, which lets clients confirm that results came from multiple
+/// peers. It is derived locally from the result's authenticated sender, so it is
+/// not part of the on-chain result and never round-trips through a peer's JSON.
+///
+/// Note that BM25 scores are computed against each peer's local corpus, so
+/// `origin` identifies who reported the retained score, not the best node for
+/// that skill network-wide.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct AggregatedMatch {
+    /// Digest of the matched skill.
+    #[serde(serialize_with = "serialize_hash")]
+    pub(crate) skill_digest: Hash,
+    /// Best BM25 score seen for this skill across all verified peer results.
+    pub(crate) bm25_score: Bm25Score,
+    /// Node ID of the peer that supplied the best score, omitted from the
+    /// response when it is not known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) origin: Option<String>,
+}
+
 // Deduplicates matches by skill digest, keeping the best score seen for each
 // skill, and orders them by descending score then digest.
-pub(crate) fn aggregate_matches(results: &[&SearchResult]) -> Vec<SkillMatch> {
-    let mut best_scores: HashMap<Hash, Bm25Score> = new_hashmap();
+pub(crate) fn aggregate_matches(results: &[&SearchResult]) -> Vec<AggregatedMatch> {
+    // (score, origin) so we track which peer provided the best score.
+    let mut best_scores: HashMap<Hash, (Bm25Score, Option<String>)> = new_hashmap();
     for result in results {
         for skill_match in &result.matches {
-            let score = best_scores
+            let entry = best_scores
                 .entry(skill_match.skill_digest)
-                .or_insert(skill_match.bm25_score);
-            if skill_match.bm25_score > *score {
-                *score = skill_match.bm25_score;
+                .or_insert_with(|| (skill_match.bm25_score, None));
+            if skill_match.bm25_score > entry.0 || entry.1.is_none() {
+                entry.0 = skill_match.bm25_score;
+                entry.1 = Some(result.sender.to_string());
             }
         }
     }
 
-    let mut aggregated: Vec<SkillMatch> = best_scores
+    let mut aggregated: Vec<AggregatedMatch> = best_scores
         .into_iter()
-        .map(|(skill_digest, bm25_score)| SkillMatch {
+        .map(|(skill_digest, (bm25_score, origin))| AggregatedMatch {
             skill_digest,
             bm25_score,
+            origin,
         })
         .collect();
     aggregated.sort_by(|left, right| {

@@ -127,6 +127,16 @@ def test_search_lifecycle_completes() -> None:
         assert len(results["results"]) == status["received_results"] + 1
         assert isinstance(results["aggregated"], list)
         assert results["aggregated"]
+        # Every aggregated match should carry an origin that matches a known node.
+        lyquid, nodes = lifecycle.load_nodes(NODES_JSON)  # type: ignore[attr-defined]
+        known_node_ids = {node.node_id for node in nodes}
+        for match in results["aggregated"]:
+            assert "origin" in match, f"aggregated match missing origin: {match!r}"
+            origin = match["origin"]
+            assert isinstance(origin, str), f"origin is not a string: {origin!r}"
+            assert origin in known_node_ids, (
+                f"origin '{origin}' does not match any known node (known: {known_node_ids})"
+            )
 
         lyquid, nodes = lifecycle.load_nodes(NODES_JSON)  # type: ignore[attr-defined]
         manager = NodeManager(

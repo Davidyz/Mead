@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SkillSummary:
-    """A skill entry returned by ``GET /skills/list``."""
+    """A skill entry returned by ``GET /skills/list`` or a search match."""
 
     name: str
     description: str
     digest: str
+    origin: str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
@@ -28,6 +29,7 @@ class SkillSummary:
             name=data["name"],
             description=data["description"],
             digest=data["digest"],
+            origin=_optional_str(data, "origin"),
         )
 
 
@@ -61,6 +63,7 @@ class SearchMatch:
 
     skill_digest: str
     bm25_score: int
+    origin: str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
@@ -71,6 +74,7 @@ class SearchMatch:
         return cls(
             skill_digest=digest,
             bm25_score=_json_int(data.get("bm25_score")),
+            origin=_optional_str(data, "origin"),
         )
 
 
@@ -214,6 +218,16 @@ def _json_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _optional_str(data: Mapping[str, Any], key: str) -> str | None:
+    """Return an optional string field, rejecting values of the wrong type."""
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{key} must be a string, got {type(value).__name__}")
+    return value
+
+
 def _validate_wait(timeout: float, poll_interval: float) -> None:
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
@@ -261,6 +275,11 @@ class NodeManager:
         self._host = _virtual_host(cli_args.lyquid_id, cli_args.node_id)
         self._node_id = _canonical_node_id(cli_args.node_id)
         self._search_lock = threading.Lock()
+
+    @property
+    def node_id(self) -> str | None:
+        """Canonical ID of the node this manager talks to, if configured."""
+        return self._node_id
 
     def _headers(self, *, content_type: str | None = None) -> dict[str, str]:
         headers = {"accept": "application/json"}
@@ -459,6 +478,7 @@ class NodeManager:
                     name=skill.name,
                     description=skill.description,
                     digest=match.skill_digest,
+                    origin=match.origin,
                 )
             )
         return summaries, unresolved

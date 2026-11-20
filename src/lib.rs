@@ -1073,7 +1073,7 @@ fn search_status_endpoint(ctx: &_, req: http::Request) -> LyquidResult<http::Res
 //     {
 //       "skill_digest": "0x51bd...",
 //       "bm25_score": 1231569101,
-//       "origin": "Node-3l2hq7fz4vx6yq3p2a5m5nq5b7m4t5k6w7c5d3j6h4r2e5a7b2n4x6c"
+//       "origin": "Node-ve3tav5jw5ico7or34gcb6ni7rtmd35uokriuijygabd3tsltd7fj6ia"
 //     }
 //   ]
 // }

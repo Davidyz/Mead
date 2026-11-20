@@ -501,3 +501,18 @@ def test_oracle_status_tolerates_null_epochs() -> None:
 def test_registration_response_rejects_non_object_json() -> None:
     with pytest.raises(TypeError, match="expected a JSON object"):
         NodeRegistrationResponse.from_dict(cast(Any, []))
+
+
+def test_search_match_parses_origin_when_present() -> None:
+    match = SearchMatch.from_dict(
+        {"skill_digest": "0xabc", "bm25_score": 42, "origin": "Node-peer"}
+    )
+
+    assert match == SearchMatch("0xabc", 42, "Node-peer")
+
+
+def test_search_match_defaults_missing_origin_to_none() -> None:
+    # Older nodes do not emit `origin`; the field is optional on the wire.
+    match = SearchMatch.from_dict({"skill_digest": "0xabc", "bm25_score": 42})
+
+    assert match == SearchMatch("0xabc", 42, None)

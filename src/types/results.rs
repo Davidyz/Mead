@@ -90,7 +90,7 @@ impl ResultRegistry {
             .filter(|((id, _), _)| id == query_id)
             .map(|(_, result)| result)
             .collect();
-        results.sort_by(|left, right| left.sender.0.cmp(&right.sender.0));
+        results.sort_by_key(|result| result.sender.0);
         results
     }
 
@@ -129,9 +129,6 @@ pub struct SkillMatch {
     /// BM25 relevance score computed with the top-k skills as the corpus,
     /// in the protocol's canonical fixed-point representation.
     pub bm25_score: Bm25Score,
-    /// Node ID of the peer that submitted this match, if available.
-    #[serde(default)]
-    pub origin: Option<String>,
 }
 
 impl SkillMatch {
@@ -342,7 +339,6 @@ mod tests {
         SkillMatch {
             skill_digest: blake3::hash(&[byte]),
             bm25_score: score,
-            origin: None,
         }
     }
 

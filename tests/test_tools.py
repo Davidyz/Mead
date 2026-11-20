@@ -87,6 +87,43 @@ def test_mcp_search_skills_surfaces_partial_result_metadata() -> None:
     }
 
 
+def test_mcp_search_skills_includes_peer_origin() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo", "Node-peer")
+    fake = FakeNodeManager([summary], {}, node_id="Node-me")
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert payload["skills"] == [
+        {
+            "name": "demo",
+            "description": "A demo skill",
+            "digest": "digest-demo",
+            "origin": "Node-peer",
+        }
+    ]
+
+
+def test_mcp_search_skills_labels_own_node_origin_as_local() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo", "Node-me")
+    fake = FakeNodeManager([summary], {}, node_id="Node-me")
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert payload["skills"][0]["origin"] == "local"
+
+
+def test_mcp_search_skills_omits_absent_origin() -> None:
+    summary = SkillSummary("demo", "A demo skill", "digest-demo")
+    fake = FakeNodeManager([summary], {}, node_id="Node-me")
+    tools = MeadTools(cast(NodeManager, fake))
+
+    payload = tools.mcp_search_skills("demo query")
+
+    assert "origin" not in payload["skills"][0]
+
+
 def test_mcp_get_skill_exposes_skill_md_or_selected_resources() -> None:
     skill = Skill.from_manifest(
         {

@@ -89,6 +89,11 @@ the virtual `Host` header `<lyquid-label>.<node-label>` (strip the `Lyquid-` and
 `Node-` prefixes); the `scripts/search_lifecycle.py` and `tests/test_search_lifecycle.py`
 helpers build it from `tests/fixture/nodes.json`.
 
+The complete HTTP contract — paths, methods, status codes, and response
+bodies — is documented in the comments next to each
+`#[method::instance(export = http, ...)]` handler in the Rust source (see
+`src/lib.rs`).
+
 ## Running the Local MCP for Debugging
 
 For debugging and experimenting, you can run the MCP server directly from the local source instead of pulling it from the remote repository. Add a configuration like the following to your agent's MCP settings:

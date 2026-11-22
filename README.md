@@ -15,7 +15,7 @@ Session exports from pi-agent are available in the [assets](./assets) directory.
 
 > To try this out on a devnet, please follow the developer guide in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-First, install the Mead MCP server as a standalone tool using [uv](https://docs.astral.sh/uv/getting-started/installation/):
+Mead runs as an MCP server and is installed with [uv](https://docs.astral.sh/uv/getting-started/installation/), which also provides the Python runtime it needs. Install uv if you don't already have it, then install the Mead MCP server as a standalone tool:
 ```bash
 uv tool install --force git+https://github.com/Davidyz/Mead.git
 ```
@@ -27,6 +27,8 @@ Then add it to your agent's MCP configuration:
     "mead": {
       "command": "mead",
       "args": [
+        "--server-url",
+        "<SERVER_URL>",
         "--node-id",
         "<NODE_ID>",
         "--lyquid-id",
@@ -39,6 +41,7 @@ Then add it to your agent's MCP configuration:
 ```
 
 Pass `--node-id` and `--lyquid-id` (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID` env vars) to connect to a specific node.
+`--server-url` selects the Lyquor node to talk to; it defaults to `http://127.0.0.1:10087`, the local devnet, so set it explicitly to use a node running elsewhere.
 Add `--skill-dir <SKILL_DIR>` to upload local skills alongside search.
 
 ## MCP Tools

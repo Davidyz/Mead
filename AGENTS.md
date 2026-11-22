@@ -15,7 +15,7 @@ You should also refer to `./CONTRIBUTING.md` and other documentation in this rep
 
 - See the Lyquor documentation at `https://docs.rs/lyquid/latest/lyquid/index.html`.
 - The application will be deployed with the shaker CLI. See its documentation at `https://docs.rs/shaker/latest/shaker/`.
-- The documentation for the LDE (Lyquid Development Kit) is also available at `https://docs.lyquor.dev/docs/ldk/`.
+- The documentation for the LDK (Lyquid Development Kit) is also available at `https://docs.lyquor.dev/docs/ldk/`.
 
 # Coding Guidelines
 

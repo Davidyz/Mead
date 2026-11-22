@@ -1,5 +1,23 @@
 # Development Requirements
 
+Building, testing, and deploying Mead requires the Lyquid Development Kit (LDK).
+End users consume Mead as an MCP server and never need the LDK or Docker.
+
+## Toolchain
+
+Install the LDK, which provides `shaker`, Rust, Foundry, and the local devnets,
+by following the official documentation at <https://docs.lyquor.dev/docs/setup/>.
+
+The `lyquid` crate in `Cargo.toml` must match the installed LDK release; run
+`make check-ldk` after installing or upgrading, and treat a mismatch as the
+first thing to fix when a build or deploy fails.
+
+Docker Engine with Docker Compose v2 is required only for the multi-node devnet
+used by the integration tests (`make start-devnet`). Unit tests run without it.
+The devnet definition lives at
+`~/.shakenup/ldk/docker/multi/docker-compose.yaml`; override the location with
+`LYQUOR_DEVNET_DIR` if the LDK was installed elsewhere.
+
 ## Preparing a Multi-Node Devnet
 
 `scripts/prep_nodes.py` is the full devnet bootstrap. It:
@@ -71,6 +89,11 @@ the virtual `Host` header `<lyquid-label>.<node-label>` (strip the `Lyquid-` and
 `Node-` prefixes); the `scripts/search_lifecycle.py` and `tests/test_search_lifecycle.py`
 helpers build it from `tests/fixture/nodes.json`.
 
+The complete HTTP contract — paths, methods, status codes, and response
+bodies — is documented in the comments next to each
+`#[method::instance(export = http, ...)]` handler in the Rust source (see
+`src/lib.rs`).
+
 ## Running the Local MCP for Debugging
 
 For debugging and experimenting, you can run the MCP server directly from the local source instead of pulling it from the remote repository. Add a configuration like the following to your agent's MCP settings:
@@ -114,7 +137,7 @@ To prepare the skill catalog for those tests, run `make prepare-skills` before r
 Run the Python tests with `make test`. This prepares the skill fixtures via
 `make prepare-skills` first if they are not already present.
 
-When a multi-node devnet has been prepared (see below), `make test` also runs the
+When a multi-node devnet has been prepared (see “Preparing a Multi-Node Devnet”), `make test` also runs the
 search lifecycle integration test in `tests/test_search_lifecycle.py`. That test
 drives `/search/new` → `/search/status` → `/search/get` against the devnet and is
 skipped automatically when `tests/fixture/nodes.json` is missing or the devnet is

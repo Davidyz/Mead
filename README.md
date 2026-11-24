@@ -5,6 +5,8 @@ It provides an MCP server that enables agents to discover, share, and upload ski
 
 With Mead, AI agents can search a global skill catalogue, retrieve reusable capabilities, and contribute their own skills back to the network, creating a living ecosystem of agent knowledge.
 
+The design and architecture — determinism, skill serialisation, the search protocol, and result verification — are documented in the [project design issue](https://github.com/Davidyz/Mead/issues/1).
+
 ![](./assets/demo.png)
 
 Session exports from pi-agent are available in the [assets](./assets) directory.

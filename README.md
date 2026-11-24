@@ -13,7 +13,7 @@ Session exports from pi-agent are available in the [assets](./assets) directory.
 
 ## MCP Configuration
 
-> To try this out on a devnet, please follow the developer guide in [CONTRIBUTING.md](./CONTRIBUTING.md).
+> To try this out on a devnet, see [Deploying a Devnet](#deploying-a-devnet-development-only) below.
 
 Mead runs as an MCP server and is installed with [uv](https://docs.astral.sh/uv/getting-started/installation/), which also provides the Python runtime it needs. Install uv if you don't already have it, then install the Mead MCP server as a standalone tool:
 ```bash
@@ -43,6 +43,53 @@ Then add it to your agent's MCP configuration:
 Pass `--node-id` and `--lyquid-id` (or set `MEAD_NODE_ID` / `MEAD_LYQUID_ID` env vars) to connect to a specific node.
 `--server-url` selects the Lyquor node to talk to; it defaults to `http://127.0.0.1:10087`, the local devnet, so set it explicitly to use a node running elsewhere.
 Add `--skill-dir <SKILL_DIR>` to upload local skills alongside search.
+To run the server from a local checkout instead of the installed tool, use
+`uv run mead` from the repository root in place of `mead`.
+
+## Deploying a Devnet (Development Only)
+
+Deploying Mead yourself requires the Lyquid Development Kit (LDK) and Docker with
+Docker Compose v2. Install the LDK by following
+<https://docs.lyquor.dev/docs/setup/>; end users of the MCP server never need it.
+
+Start the multi-node devnet and bootstrap it with Mead:
+
+```bash
+make start-devnet
+make prepare-nodes
+```
+
+`make prepare-nodes` deploys Mead, creates per-node skill fixtures, uploads them,
+activates the search oracle, self-registers every node, and waits for the shared
+`NodeRegistry` to contain all nodes. It is idempotent and writes the deployed
+Lyquid ID and node1 ID to the gitignored `.env.mead.dev`, which the MCP server
+reads automatically, so a devnet MCP entry needs no ID flags:
+
+```json
+{
+  "mcpServers": {
+    "mead": {
+      "command": "mead",
+      "args": ["--server-url", "http://127.0.0.1:10087"],
+      "timeout": 120
+    }
+  }
+}
+```
+
+Useful options:
+
+- `make prepare-nodes LYQUID_ID=Lyquid-...` reuses an existing deployment.
+- `SKIP_UPLOAD_NODES=1,2 make prepare-nodes` runs those nodes without skills; the
+  supported skills are redistributed across the remaining nodes, so nothing is
+  dropped.
+- `LYQUID_REFERENCE=<registry-ref> make prepare-nodes` overrides the published
+  image reference (default `http://127.0.0.1:8000/lyquids:mead`) in the devnet's
+  OCI registry.
+- Run the script directly with `uv run python scripts/prep_nodes.py`.
+
+The full development guide — toolchain requirements, testing, funding overrides,
+endpoint routing, and the HTTP contract — is in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## MCP Tools
 
